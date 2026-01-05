@@ -70,7 +70,10 @@ def did_open(params: lsp.DidOpenTextDocumentParams) -> None:
     """LSP handler for textDocument/didOpen request."""
     document = LSP_SERVER.workspace.get_document(params.text_document.uri)
     diagnostics: list[lsp.Diagnostic] = _linting_helper(document)
-    LSP_SERVER.publish_diagnostics(document.uri, diagnostics)
+    # pygls 2.0: takes PublishDiagnosticsParams object
+    LSP_SERVER.text_document_publish_diagnostics(
+        lsp.PublishDiagnosticsParams(uri=document.uri, diagnostics=diagnostics)
+    )
 
 
 @LSP_SERVER.feature(lsp.TEXT_DOCUMENT_DID_SAVE)
@@ -78,7 +81,10 @@ def did_save(params: lsp.DidSaveTextDocumentParams) -> None:
     """LSP handler for textDocument/didSave request."""
     document = LSP_SERVER.workspace.get_document(params.text_document.uri)
     diagnostics: list[lsp.Diagnostic] = _linting_helper(document)
-    LSP_SERVER.publish_diagnostics(document.uri, diagnostics)
+    # pygls 2.0: takes PublishDiagnosticsParams object
+    LSP_SERVER.text_document_publish_diagnostics(
+        lsp.PublishDiagnosticsParams(uri=document.uri, diagnostics=diagnostics)
+    )
 
 
 @LSP_SERVER.feature(lsp.TEXT_DOCUMENT_DID_CLOSE)
@@ -86,7 +92,10 @@ def did_close(params: lsp.DidCloseTextDocumentParams) -> None:
     """LSP handler for textDocument/didClose request."""
     document = LSP_SERVER.workspace.get_document(params.text_document.uri)
     # Publishing empty diagnostics to clear the entries for this file.
-    LSP_SERVER.publish_diagnostics(document.uri, [])
+    # pygls 2.0: takes PublishDiagnosticsParams object
+    LSP_SERVER.text_document_publish_diagnostics(
+        lsp.PublishDiagnosticsParams(uri=document.uri, diagnostics=[])
+    )
 
 
 def _linting_helper(document: TextDocument) -> list[lsp.Diagnostic]:
@@ -354,25 +363,38 @@ def _run_tool_on_document(
 def log_to_output(
     message: str, msg_type: lsp.MessageType = lsp.MessageType.Log
 ) -> None:
-    LSP_SERVER.show_message_log(message, msg_type)
+    # pygls 2.0: takes LogMessageParams(type, message)
+    LSP_SERVER.window_log_message(lsp.LogMessageParams(type=msg_type, message=message))
 
 
 def log_error(message: str) -> None:
-    LSP_SERVER.show_message_log(message, lsp.MessageType.Error)
+    LSP_SERVER.window_log_message(
+        lsp.LogMessageParams(type=lsp.MessageType.Error, message=message)
+    )
     if os.getenv("LS_SHOW_NOTIFICATION", "off") in ["onError", "onWarning", "always"]:
-        LSP_SERVER.show_message(message, lsp.MessageType.Error)
+        LSP_SERVER.window_show_message(
+            lsp.ShowMessageParams(type=lsp.MessageType.Error, message=message)
+        )
 
 
 def log_warning(message: str) -> None:
-    LSP_SERVER.show_message_log(message, lsp.MessageType.Warning)
+    LSP_SERVER.window_log_message(
+        lsp.LogMessageParams(type=lsp.MessageType.Warning, message=message)
+    )
     if os.getenv("LS_SHOW_NOTIFICATION", "off") in ["onWarning", "always"]:
-        LSP_SERVER.show_message(message, lsp.MessageType.Warning)
+        LSP_SERVER.window_show_message(
+            lsp.ShowMessageParams(type=lsp.MessageType.Warning, message=message)
+        )
 
 
 def log_always(message: str) -> None:
-    LSP_SERVER.show_message_log(message, lsp.MessageType.Info)
+    LSP_SERVER.window_log_message(
+        lsp.LogMessageParams(type=lsp.MessageType.Info, message=message)
+    )
     if os.getenv("LS_SHOW_NOTIFICATION", "off") in ["always"]:
-        LSP_SERVER.show_message(message, lsp.MessageType.Info)
+        LSP_SERVER.window_show_message(
+            lsp.ShowMessageParams(type=lsp.MessageType.Info, message=message)
+        )
 
 
 # *****************************************************
