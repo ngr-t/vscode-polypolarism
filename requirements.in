@@ -12,5 +12,5 @@
 pygls
 packaging
 
-# polypolarism type checker
-polypolarism
+# polypolarism - install from local path or GitHub
+# pip install git+https://github.com/ngr-t/polypolarism.git
