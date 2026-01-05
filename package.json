@@ -1,0 +1,160 @@
+{
+    "name": "polypolarism",
+    "displayName": "Polypolarism",
+    "description": "Static type checker for Polars DataFrames based on row polymorphism.",
+    "version": "0.1.0",
+    "preview": true,
+    "serverInfo": {
+        "name": "Polypolarism",
+        "module": "polypolarism"
+    },
+    "publisher": "t-negoro",
+    "license": "MIT",
+    "homepage": "https://github.com/t-negoro/vscode-polypolarism",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/t-negoro/vscode-polypolarism.git"
+    },
+    "bugs": {
+        "url": "https://github.com/t-negoro/vscode-polypolarism/issues"
+    },
+    "galleryBanner": {
+        "color": "#1e415e",
+        "theme": "dark"
+    },
+    "keywords": [
+        "python",
+        "polars",
+        "dataframe",
+        "type-checker",
+        "polypolarism"
+    ],
+    "engines": {
+        "vscode": "^1.78.0"
+    },
+    "categories": [
+        "Programming Languages",
+        "Linters"
+    ],
+    "extensionDependencies": [
+        "ms-python.python"
+    ],
+    "capabilities": {
+        "virtualWorkspaces": {
+            "supported": false,
+            "description": "Virtual Workspaces are not supported with Polypolarism."
+        }
+    },
+    "activationEvents": [
+        "onLanguage:python",
+        "workspaceContains:*.py"
+    ],
+    "main": "./dist/extension.js",
+    "scripts": {
+        "vscode:prepublish": "npm run package",
+        "compile": "webpack",
+        "watch": "webpack --watch",
+        "package": "webpack --mode production --devtool source-map --config ./webpack.config.js",
+        "compile-tests": "tsc -p . --outDir out",
+        "watch-tests": "tsc -p . -w --outDir out",
+        "pretest": "npm run compile-tests && npm run compile && npm run lint",
+        "lint": "eslint src --ext ts",
+        "format-check": "prettier --check 'src/**/*.ts' 'build/**/*.yml' '.github/**/*.yml'",
+        "test": "node ./out/test/runTest.js",
+        "vsce-package": "vsce package -o polypolarism.vsix"
+    },
+    "contributes": {
+        "configuration": {
+            "properties": {
+                "polypolarism.args": {
+                    "default": [],
+                    "description": "Arguments passed to polypolarism. Each argument is a separate item in the array.",
+                    "items": {
+                        "type": "string"
+                    },
+                    "scope": "resource",
+                    "type": "array"
+                },
+                "polypolarism.path": {
+                    "default": [],
+                    "description": "When set to a path to polypolarism binary, extension will use that.",
+                    "scope": "resource",
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "polypolarism.importStrategy": {
+                    "default": "useBundled",
+                    "description": "Defines where `polypolarism` is imported from.",
+                    "enum": [
+                        "useBundled",
+                        "fromEnvironment"
+                    ],
+                    "enumDescriptions": [
+                        "Always use the bundled version of `polypolarism`.",
+                        "Use `polypolarism` from environment, fallback to bundled version only if `polypolarism` not available in the environment."
+                    ],
+                    "scope": "window",
+                    "type": "string"
+                },
+                "polypolarism.interpreter": {
+                    "default": [],
+                    "description": "When set to a path to python executable, extension will use that to launch the server and any subprocess.",
+                    "scope": "resource",
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "polypolarism.showNotifications": {
+                    "default": "off",
+                    "description": "Controls when notifications are shown by this extension.",
+                    "enum": [
+                        "off",
+                        "onError",
+                        "onWarning",
+                        "always"
+                    ],
+                    "enumDescriptions": [
+                        "All notifications are turned off, any errors or warning are still available in the logs.",
+                        "Notifications are shown only in the case of an error.",
+                        "Notifications are shown for errors and warnings.",
+                        "Notifications are show for anything that the server chooses to show."
+                    ],
+                    "scope": "machine",
+                    "type": "string"
+                }
+            }
+        },
+        "commands": [
+            {
+                "title": "Restart Server",
+                "category": "Polypolarism",
+                "command": "polypolarism.restart"
+            }
+        ]
+    },
+    "dependencies": {
+        "@vscode/python-extension": "^1.0.5",
+        "fs-extra": "^11.2.0",
+        "vscode-languageclient": "^8.1.0"
+    },
+    "devDependencies": {
+        "@types/fs-extra": "^11.0.4",
+        "@types/vscode": "1.78.0",
+        "@types/glob": "^8.1.0",
+        "@types/node": "20.x",
+        "@typescript-eslint/eslint-plugin": "^6.17.0",
+        "@typescript-eslint/parser": "^6.17.0",
+        "@vscode/test-electron": "^2.3.8",
+        "@vscode/vsce": "^2.22.0",
+        "eslint": "^8.56.0",
+        "glob": "^10.3.10",
+        "prettier": "^3.1.1",
+        "typescript": "^5.3.3",
+        "ts-loader": "^9.5.1",
+        "webpack": "^5.89.0",
+        "webpack-cli": "^5.1.4"
+    }
+}
