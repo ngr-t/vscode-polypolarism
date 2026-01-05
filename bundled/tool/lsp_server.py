@@ -1,4 +1,5 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
+# Copyright (c) 2025 Tetsuya NEGORO. All rights reserved.
 # Licensed under the MIT License.
 """Implementation of polypolarism support over LSP."""
 from __future__ import annotations
@@ -37,14 +38,16 @@ update_sys_path(
 import lsp_jsonrpc as jsonrpc
 import lsp_utils as utils
 import lsprotocol.types as lsp
-from pygls import server, uris, workspace
+from pygls import uris
+from pygls.lsp.server import LanguageServer
+from pygls.workspace import TextDocument
 
 WORKSPACE_SETTINGS = {}
 GLOBAL_SETTINGS = {}
 RUNNER = pathlib.Path(__file__).parent / "lsp_runner.py"
 
 MAX_WORKERS = 5
-LSP_SERVER = server.LanguageServer(
+LSP_SERVER = LanguageServer(
     name="Polypolarism", version="0.1.0", max_workers=MAX_WORKERS
 )
 
@@ -86,7 +89,7 @@ def did_close(params: lsp.DidCloseTextDocumentParams) -> None:
     LSP_SERVER.publish_diagnostics(document.uri, [])
 
 
-def _linting_helper(document: workspace.Document) -> list[lsp.Diagnostic]:
+def _linting_helper(document: TextDocument) -> list[lsp.Diagnostic]:
     """Run polypolarism and parse JSON output."""
     result = _run_tool_on_document(document)
     if result and result.stdout:
@@ -210,7 +213,7 @@ def _get_settings_by_path(file_path: pathlib.Path):
     return setting_values[0]
 
 
-def _get_document_key(document: workspace.Document):
+def _get_document_key(document: TextDocument):
     if WORKSPACE_SETTINGS:
         document_workspace = pathlib.Path(document.path)
         workspaces = {s["workspaceFS"] for s in WORKSPACE_SETTINGS.values()}
@@ -224,7 +227,7 @@ def _get_document_key(document: workspace.Document):
     return None
 
 
-def _get_settings_by_document(document: workspace.Document | None):
+def _get_settings_by_document(document: TextDocument | None):
     if document is None or document.path is None:
         return list(WORKSPACE_SETTINGS.values())[0]
 
@@ -246,7 +249,7 @@ def _get_settings_by_document(document: workspace.Document | None):
 # Internal execution APIs.
 # *****************************************************
 def _run_tool_on_document(
-    document: workspace.Document,
+    document: TextDocument,
     use_stdin: bool = False,
     extra_args: Optional[Sequence[str]] = None,
 ) -> utils.RunResult | None:
