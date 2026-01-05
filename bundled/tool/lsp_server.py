@@ -68,7 +68,7 @@ TOOL_ARGS = ["--format", "json"]
 @LSP_SERVER.feature(lsp.TEXT_DOCUMENT_DID_OPEN)
 def did_open(params: lsp.DidOpenTextDocumentParams) -> None:
     """LSP handler for textDocument/didOpen request."""
-    document = LSP_SERVER.workspace.get_document(params.text_document.uri)
+    document = LSP_SERVER.workspace.text_documents.get(params.text_document.uri)
     diagnostics: list[lsp.Diagnostic] = _linting_helper(document)
     # pygls 2.0: takes PublishDiagnosticsParams object
     LSP_SERVER.text_document_publish_diagnostics(
@@ -79,7 +79,7 @@ def did_open(params: lsp.DidOpenTextDocumentParams) -> None:
 @LSP_SERVER.feature(lsp.TEXT_DOCUMENT_DID_SAVE)
 def did_save(params: lsp.DidSaveTextDocumentParams) -> None:
     """LSP handler for textDocument/didSave request."""
-    document = LSP_SERVER.workspace.get_document(params.text_document.uri)
+    document = LSP_SERVER.workspace.text_documents.get(params.text_document.uri)
     diagnostics: list[lsp.Diagnostic] = _linting_helper(document)
     # pygls 2.0: takes PublishDiagnosticsParams object
     LSP_SERVER.text_document_publish_diagnostics(
@@ -90,7 +90,7 @@ def did_save(params: lsp.DidSaveTextDocumentParams) -> None:
 @LSP_SERVER.feature(lsp.TEXT_DOCUMENT_DID_CLOSE)
 def did_close(params: lsp.DidCloseTextDocumentParams) -> None:
     """LSP handler for textDocument/didClose request."""
-    document = LSP_SERVER.workspace.get_document(params.text_document.uri)
+    document = LSP_SERVER.workspace.text_documents.get(params.text_document.uri)
     # Publishing empty diagnostics to clear the entries for this file.
     # pygls 2.0: takes PublishDiagnosticsParams object
     LSP_SERVER.text_document_publish_diagnostics(
