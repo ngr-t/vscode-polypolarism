@@ -116,10 +116,18 @@ def _parse_json_output(content: str) -> list[lsp.Diagnostic]:
             # polypolarism uses 1-indexed lines, LSP uses 0-indexed
             line = max(diag_data.get("line", 1) - 1, 0)
             column = diag_data.get("column", 0)
+            # Use end_line if available, otherwise use same line
+            end_line = diag_data.get("end_line")
+            if end_line is not None:
+                end_line = max(end_line - 1, 0)
+            else:
+                end_line = line
+            end_column = diag_data.get("end_column", 0)
 
-            position = lsp.Position(line=line, character=column)
+            start_pos = lsp.Position(line=line, character=column)
+            end_pos = lsp.Position(line=end_line, character=end_column)
             diagnostic = lsp.Diagnostic(
-                range=lsp.Range(start=position, end=position),
+                range=lsp.Range(start=start_pos, end=end_pos),
                 message=diag_data.get("message", "Unknown error"),
                 severity=_get_severity(diag_data.get("severity", "error")),
                 source=TOOL_MODULE,
