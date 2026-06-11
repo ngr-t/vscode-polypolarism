@@ -5,14 +5,22 @@ Static type checker for Polars DataFrames based on row polymorphism.
 ## Features
 
 - Real-time type checking for Polars DataFrame operations
-- Shows errors in the Problems panel and inline in the editor
-- Checks on file save
+- Shows errors and warnings in the Problems panel and inline in the editor
+- Diagnostics carry their stable polypolarism code (`PLY###` errors,
+  `PLW###` warnings); the code links to the corresponding table in the
+  [polypolarism README](https://github.com/ngr-t/polypolarism#diagnostic-codes)
+- Files that fail to parse are reported as a syntax-error diagnostic
+- Checks on file open and save
 
 ## Requirements
 
 - VS Code 1.78.0 or greater
 - Python 3.11 or higher
 - `polypolarism` package installed in your Python environment
+  (recommended; see [Installation](#installation))
+- polypolarism's supported window: Polars `1.37+`, Pandera `0.19+`
+  (older versions are best-effort and flagged by a `PLW010` warning;
+  see [Supported versions](https://github.com/ngr-t/polypolarism#supported-versions))
 
 ## Installation
 
@@ -34,29 +42,60 @@ Static type checker for Polars DataFrames based on row polymorphism.
    pip install git+https://github.com/ngr-t/polypolarism.git
    ```
 
-4. Reload VSCode window
+4. Set `polypolarism.importStrategy` to `fromEnvironment` (recommended:
+   the bundled copy is only a fallback snapshot and may lag behind the
+   version you installed)
+
+5. Reload VSCode window
 
 ## Usage
 
-Add type annotations to your DataFrame functions using the `DF` type:
+Declare schemas as Pandera `DataFrameModel` classes and annotate your
+functions with `DataFrame[Schema]` / `LazyFrame[Schema]`:
 
 ```python
-from polypolarism import DF
+import pandera.polars as pa
+import polars as pl
+from pandera.typing.polars import DataFrame
 
-def process_users(
-    users: DF["{id: Int64, name: Utf8}"],
-) -> DF["{id: Int64, name: Utf8, active: Boolean}"]:
+
+class Users(pa.DataFrameModel):
+    id: int
+    name: str
+
+
+class ActiveUsers(pa.DataFrameModel):
+    id: int
+    name: str
+    active: bool
+
+
+def process_users(users: DataFrame[Users]) -> DataFrame[ActiveUsers]:
     return users.with_columns(pl.lit(True).alias("active"))
 ```
 
-The extension will automatically check your code on save and report any type mismatches.
+The extension will automatically check your code on open and save and
+report any type mismatches.
+
+## Diagnostics
+
+| Kind | Codes | Shown as |
+|---|---|---|
+| Errors | `PLY001`–`PLY033` | Problems panel **Error** |
+| Warnings | `PLW001`–`PLW010` | Problems panel **Warning** |
+
+Each diagnostic's code links to its description in the polypolarism
+README ([error table](https://github.com/ngr-t/polypolarism#diagnostic-codes),
+[warning table](https://github.com/ngr-t/polypolarism#apply-style-helpers-and-warning-codes)).
+Files that cannot be parsed produce an uncoded `SyntaxError` diagnostic
+instead of being silently skipped.
 
 ## Configuration
 
 - `polypolarism.args`: Additional arguments to pass to polypolarism
 - `polypolarism.path`: Custom path to polypolarism executable
 - `polypolarism.interpreter`: Python interpreter to use
-- `polypolarism.importStrategy`: Where to import polypolarism from (`useBundled` or `fromEnvironment`)
+- `polypolarism.importStrategy`: Where to import polypolarism from (`useBundled` or `fromEnvironment`; `fromEnvironment` is recommended while polypolarism is not on PyPI)
 - `polypolarism.showNotifications`: When to show notifications (`off`, `onError`, `onWarning`, `always`)
 
 ## Commands
@@ -132,8 +171,8 @@ pip install git+https://github.com/ngr-t/polypolarism.git
 
 1. Make sure polypolarism is installed in the Python environment VSCode is using
 2. Check `polypolarism.importStrategy` setting:
-   - `useBundled`: Uses polypolarism bundled with the extension
-   - `fromEnvironment`: Uses polypolarism from your Python environment (recommended for development)
+   - `useBundled`: Uses the polypolarism snapshot bundled with the extension
+   - `fromEnvironment`: Uses polypolarism from your Python environment (recommended — keeps you on the version you installed from GitHub)
 
 ### "externally-managed-environment" error when installing nox
 
