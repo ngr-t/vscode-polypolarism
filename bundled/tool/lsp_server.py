@@ -8,6 +8,7 @@ import copy
 import json
 import os
 import pathlib
+import re
 import sys
 import traceback
 from typing import Any, Optional, Sequence
@@ -60,6 +61,16 @@ TOOL_DISPLAY = "Polypolarism"
 # Use JSON output format for easy parsing
 TOOL_ARGS = ["--format", "json"]
 
+# polypolarism tags each diagnostic message with a stable `[PLY###]` (error)
+# or `[PLW###]` (warning) prefix. Extract it into the LSP `code` field.
+DIAGNOSTIC_CODE_RE = re.compile(r"^\[(PL[YW]\d{3})\]\s*")
+
+# README anchors for the diagnostic-code tables (PLY### / PLW###).
+ERROR_CODES_HREF = "https://github.com/ngr-t/polypolarism#diagnostic-codes"
+WARNING_CODES_HREF = (
+    "https://github.com/ngr-t/polypolarism#apply-style-helpers-and-warning-codes"
+)
+
 
 # **********************************************************
 # Linting features
@@ -102,34 +113,77 @@ def _linting_helper(document: TextDocument) -> list[lsp.Diagnostic]:
     """Run polypolarism and parse JSON output."""
     result = _run_tool_on_document(document)
     if result and result.stdout:
-        return _parse_json_output(result.stdout)
+        return _parse_json_output(result.stdout, document.path)
     return []
 
 
-def _parse_json_output(content: str) -> list[lsp.Diagnostic]:
+def _split_code(message: str) -> tuple[Optional[str], str]:
+    """Split the `[PLY###]` / `[PLW###]` prefix off a diagnostic message.
+
+    Returns ``(code, message)``; ``code`` is ``None`` for untagged
+    diagnostics (e.g. parse / read failures reported as SyntaxError).
+    """
+    match = DIAGNOSTIC_CODE_RE.match(message)
+    if match is None:
+        return None, message
+    return match.group(1), message[match.end() :]
+
+
+def _code_description(code: Optional[str]) -> Optional[lsp.CodeDescription]:
+    """Link a diagnostic code to its table in the polypolarism README."""
+    if code is None:
+        return None
+    if code.startswith("PLW"):
+        return lsp.CodeDescription(href=WARNING_CODES_HREF)
+    return lsp.CodeDescription(href=ERROR_CODES_HREF)
+
+
+def _to_range(diag_data: dict) -> lsp.Range:
+    """Build the LSP range from a polypolarism JSON diagnostic."""
+    # polypolarism uses 1-indexed lines, LSP uses 0-indexed
+    line = max(diag_data.get("line", 1) - 1, 0)
+    column = diag_data.get("column", 0)
+    # Use end_line if available, otherwise use same line
+    end_line = diag_data.get("end_line")
+    if end_line is not None:
+        end_line = max(end_line - 1, 0)
+    else:
+        end_line = line
+    end_column = diag_data.get("end_column", 0)
+    return lsp.Range(
+        start=lsp.Position(line=line, character=column),
+        end=lsp.Position(line=end_line, character=end_column),
+    )
+
+
+def _parse_json_output(content: str, document_path: str) -> list[lsp.Diagnostic]:
     """Parse polypolarism JSON output into LSP diagnostics."""
     diagnostics: list[lsp.Diagnostic] = []
 
     try:
         data = json.loads(content)
         for diag_data in data.get("diagnostics", []):
-            # polypolarism uses 1-indexed lines, LSP uses 0-indexed
-            line = max(diag_data.get("line", 1) - 1, 0)
-            column = diag_data.get("column", 0)
-            # Use end_line if available, otherwise use same line
-            end_line = diag_data.get("end_line")
-            if end_line is not None:
-                end_line = max(end_line - 1, 0)
-            else:
-                end_line = line
-            end_column = diag_data.get("end_column", 0)
+            # Each diagnostic carries its own `file` field (multi-file JSON
+            # output). We lint one document at a time; never attribute a
+            # diagnostic from another file to this document.
+            diag_file = diag_data.get("file")
+            if diag_file is not None and not utils.is_same_path(
+                diag_file, document_path
+            ):
+                log_to_output(
+                    f"Skipping diagnostic for other file {diag_file!r} "
+                    f"while linting {document_path!r}."
+                )
+                continue
 
-            start_pos = lsp.Position(line=line, character=column)
-            end_pos = lsp.Position(line=end_line, character=end_column)
+            code, message = _split_code(diag_data.get("message", "Unknown error"))
+
             diagnostic = lsp.Diagnostic(
-                range=lsp.Range(start=start_pos, end=end_pos),
-                message=diag_data.get("message", "Unknown error"),
+                range=_to_range(diag_data),
+                message=message,
                 severity=_get_severity(diag_data.get("severity", "error")),
+                code=code,
+                code_description=_code_description(code),
                 source=TOOL_MODULE,
             )
             diagnostics.append(diagnostic)
