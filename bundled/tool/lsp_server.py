@@ -107,13 +107,75 @@ def did_close(params: lsp.DidCloseTextDocumentParams) -> None:
     LSP_SERVER.text_document_publish_diagnostics(
         lsp.PublishDiagnosticsParams(uri=document.uri, diagnostics=[])
     )
+    FUNCTION_SUMMARIES.pop(document.uri, None)
+
+
+# Per-document cache of polypolarism's per-function schema summaries
+# (the `functions` array of --format json), refreshed on every lint run.
+# Consumed by the hover handler — D-11.
+FUNCTION_SUMMARIES: dict[str, list] = {}
+
+
+@LSP_SERVER.feature(lsp.TEXT_DOCUMENT_HOVER)
+def hover(params: lsp.HoverParams) -> Optional[lsp.Hover]:
+    """Schema hover (D-11): show polypolarism's view of the function under
+    the cursor — parameter frames and the declared/inferred return frames
+    — from the last lint run's `functions` summaries."""
+    summaries = FUNCTION_SUMMARIES.get(params.text_document.uri)
+    if not summaries:
+        return None
+    cursor_line = params.position.line + 1  # LSP is 0-indexed
+    enclosing = [
+        fn
+        for fn in summaries
+        if fn.get("line", 0) <= cursor_line <= fn.get("end_line", fn.get("line", 0))
+    ]
+    if not enclosing:
+        return None
+    # Innermost span (largest start line) if spans nest.
+    fn = max(enclosing, key=lambda f: f.get("line", 0))
+    return lsp.Hover(
+        contents=lsp.MarkupContent(
+            kind=lsp.MarkupKind.Markdown, value=_render_function_hover(fn)
+        ),
+        range=lsp.Range(
+            start=lsp.Position(line=fn["line"] - 1, character=0),
+            end=lsp.Position(line=fn["end_line"] - 1, character=0),
+        ),
+    )
+
+
+def _render_frame(frame: Optional[dict]) -> str:
+    """One-line rendering of a frame summary dict."""
+    if frame is None:
+        return "_(none)_"
+    cols = ", ".join(f"{name}: {dtype}" for name, dtype in frame.get("columns", {}).items())
+    if frame.get("open"):
+        cols = f"{cols}, ..." if cols else "..."
+    head = "LazyFrame" if frame.get("lazy") else "DataFrame"
+    strict = ", strict" if frame.get("strict") else ""
+    return f"`{head}{{{cols}}}`{strict}"
+
+
+def _render_function_hover(fn: dict) -> str:
+    """Markdown body for the function-schema hover."""
+    lines = [f"**polypolarism** — `{fn.get('name', '?')}`", ""]
+    params = fn.get("params") or {}
+    for name, frame in params.items():
+        lines.append(f"- param `{name}`: {_render_frame(frame)}")
+    lines.append(f"- declared return: {_render_frame(fn.get('declared_return'))}")
+    lines.append(f"- inferred return: {_render_frame(fn.get('inferred_return'))}")
+    if (fn.get("inferred_return") or {}).get("open"):
+        lines.append("")
+        lines.append("_open frame: may carry extra columns beyond the listed ones_")
+    return "\n".join(lines)
 
 
 def _linting_helper(document: TextDocument) -> list[lsp.Diagnostic]:
     """Run polypolarism and parse JSON output."""
     result = _run_tool_on_document(document)
     if result and result.stdout:
-        return _parse_json_output(result.stdout, document.path)
+        return _parse_json_output(result.stdout, document.path, document.uri)
     return []
 
 
@@ -156,12 +218,21 @@ def _to_range(diag_data: dict) -> lsp.Range:
     )
 
 
-def _parse_json_output(content: str, document_path: str) -> list[lsp.Diagnostic]:
+def _parse_json_output(
+    content: str, document_path: str, document_uri: Optional[str] = None
+) -> list[lsp.Diagnostic]:
     """Parse polypolarism JSON output into LSP diagnostics."""
     diagnostics: list[lsp.Diagnostic] = []
 
     try:
         data = json.loads(content)
+        if document_uri is not None:
+            FUNCTION_SUMMARIES[document_uri] = [
+                fn
+                for fn in data.get("functions", [])
+                if fn.get("file") is None
+                or utils.is_same_path(fn["file"], document_path)
+            ]
         for diag_data in data.get("diagnostics", []):
             # Each diagnostic carries its own `file` field (multi-file JSON
             # output). We lint one document at a time; never attribute a

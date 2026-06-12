@@ -1,4 +1,4 @@
-"""Sample exercising one polypolarism error (PLY001) and one warning (PLW007)."""
+"""Sample exercising one polypolarism error (PLY042) and one warning (PLW007)."""
 
 import pandera.polars as pa
 import polars as pl

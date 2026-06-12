@@ -151,6 +151,11 @@ class LspSession(MethodDispatcher):
         fut = self._send_request("textDocument/codeAction", params=code_action_params)
         return fut.result()
 
+    def text_document_hover(self, hover_params):
+        """Sends text document hover request to LSP server."""
+        fut = self._send_request("textDocument/hover", params=hover_params)
+        return fut.result()
+
     def code_action_resolve(self, code_action_resolve_params):
         """Sends text document code actions resolve request to LSP server."""
         fut = self._send_request(

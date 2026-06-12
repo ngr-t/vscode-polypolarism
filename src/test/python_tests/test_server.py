@@ -63,11 +63,15 @@ def test_linting_example():
                         "end": {"line": 19, "character": 0},
                     },
                     "message": (
-                        "Column 'amount' not found. "
-                        "Available columns: ['id', 'value']"
+                        "column 'amount' is not declared in schema "
+                        "'InputSchema' — the (non-strict) schema admits "
+                        "extra columns at runtime, but this function's "
+                        "declaration does not promise it. Declare the column "
+                        "on the schema, or take a bare pl.DataFrame parameter "
+                        "for row-polymorphic helpers"
                     ),
                     "severity": 1,
-                    "code": "PLY001",
+                    "code": "PLY042",
                     "codeDescription": {"href": ERROR_CODES_HREF},
                     "source": "polypolarism",
                 },
@@ -91,3 +95,57 @@ def test_linting_example():
         }
 
     assert_that(actual, is_(expected))
+
+
+def test_schema_hover():
+    """Hover inside a checked function shows polypolarism's schema view
+    (D-11): parameter frames plus declared/inferred returns, sourced from
+    the lint run's `functions` JSON summaries."""
+    contents = TEST_FILE_PATH.read_text()
+
+    with session.LspSession() as ls_session:
+        ls_session.initialize(defaults.VSCODE_DEFAULT_INITIALIZE)
+
+        done = Event()
+        ls_session.set_notification_callback(
+            session.PUBLISH_DIAGNOSTICS, lambda _params: done.set()
+        )
+        ls_session.notify_did_open(
+            {
+                "textDocument": {
+                    "uri": TEST_FILE_URI,
+                    "languageId": "python",
+                    "version": 1,
+                    "text": contents,
+                }
+            }
+        )
+        done.wait(TIMEOUT)
+
+        # Line inside ``process`` (0-indexed): the return statement.
+        lines = contents.splitlines()
+        process_line = next(
+            i for i, line in enumerate(lines) if line.startswith("def process")
+        )
+        hover = ls_session.text_document_hover(
+            {
+                "textDocument": {"uri": TEST_FILE_URI},
+                "position": {"line": process_line + 1, "character": 4},
+            }
+        )
+
+        assert_that(hover is not None, is_(True))
+        value = hover["contents"]["value"]
+        assert_that("process" in value, is_(True))
+        assert_that("id: Int64" in value, is_(True))
+        assert_that("declared return" in value, is_(True))
+        assert_that("inferred return" in value, is_(True))
+
+        # Hovering outside any function yields no hover.
+        outside = ls_session.text_document_hover(
+            {
+                "textDocument": {"uri": TEST_FILE_URI},
+                "position": {"line": 0, "character": 0},
+            }
+        )
+        assert_that(outside is None, is_(True))
