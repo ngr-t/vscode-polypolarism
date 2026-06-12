@@ -12,5 +12,5 @@
 pygls
 packaging
 
-# polypolarism - install from local path or GitHub
-# pip install git+https://github.com/ngr-t/polypolarism.git
+# polypolarism itself is vendored into bundled/libs by noxfile's
+# _install_bundle (a VCS dep cannot live in this hash-pinned file).
