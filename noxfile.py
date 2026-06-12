@@ -23,6 +23,20 @@ def _install_bundle(session: nox.Session) -> None:
         "-r",
         "./requirements.txt",
     )
+    # polypolarism itself (D-11 bundled-install fix): not on PyPI yet, so
+    # vendor it from GitHub. Installed separately because the hash-pinned
+    # requirements.txt cannot carry a VCS dependency; --no-deps is sound —
+    # polypolarism has zero runtime dependencies (pure-AST analysis).
+    session.install(
+        "-t",
+        "./bundled/libs",
+        "--no-cache-dir",
+        "--implementation",
+        "py",
+        "--no-deps",
+        "--upgrade",
+        "git+https://github.com/ngr-t/polypolarism.git",
+    )
 
 
 def _check_files(names: List[str]) -> None:
