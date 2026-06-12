@@ -10,6 +10,9 @@ Static type checker for Polars DataFrames based on row polymorphism.
   `PLW###` warnings); the code links to the corresponding table in the
   [polypolarism README](https://github.com/ngr-t/polypolarism#diagnostic-codes)
 - Files that fail to parse are reported as a syntax-error diagnostic
+- Schema hover: hovering inside a checked function shows polypolarism's
+  view of it — per-parameter frames and the declared vs inferred return
+  frames (an `...` marks open frames that may carry extra columns)
 - Checks on file open and save
 
 ## Requirements

@@ -17,8 +17,23 @@ Catch-up sync with polypolarism main:
   (the legacy `DF["{...}"]` DSL was removed from polypolarism) and the
   supported-version window (Polars 1.37+, Pandera 0.19+).
 - Python LSP tests replaced the generator-template examples with a real
-  polypolarism end-to-end check (one `PLY001` error, one `PLW007`
+  polypolarism end-to-end check (one `PLY042` error, one `PLW007`
   warning).
+- **Schema hover** (D-11): hovering inside a checked function shows
+  polypolarism's view of it — per-parameter frames, declared vs
+  inferred return frames, and an open-frame note — sourced from the
+  `functions` array that `polypolarism --format json` now emits.
+- **Bundled install fixed**: `nox -s setup` vendors polypolarism into
+  `bundled/libs` from GitHub main (hash-pinned `requirements.txt`
+  cannot carry a VCS dependency, so the tool never landed in the
+  bundle before). To be replaced with a PyPI pin once published.
+- `npm test` works: the `@vscode/test-electron` harness referenced by
+  `package.json` now exists (downloads VS Code, installs the
+  `ms-python.python` dependency, runs a smoke suite).
+- Toolchains refreshed in one coherent pass, superseding the stale
+  dependabot PRs: typescript-eslint 8, vsce 3.7, eslint 8.57, glob 13,
+  ts-loader 9.5, webpack 5.107, pygls 2.1.1, lsprotocol 2025.0.0,
+  pytest 9.
 
 ## 0.1.0
 
