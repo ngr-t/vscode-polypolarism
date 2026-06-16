@@ -84,8 +84,8 @@ report any type mismatches.
 
 | Kind | Codes | Shown as |
 |---|---|---|
-| Errors | `PLY001`–`PLY033` | Problems panel **Error** |
-| Warnings | `PLW001`–`PLW010` | Problems panel **Warning** |
+| Errors | `PLY001`–`PLY042` | Problems panel **Error** |
+| Warnings | `PLW001`–`PLW013` | Problems panel **Warning** |
 
 Each diagnostic's code links to its description in the polypolarism
 README ([error table](https://github.com/ngr-t/polypolarism#diagnostic-codes),

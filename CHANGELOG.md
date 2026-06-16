@@ -34,6 +34,14 @@ Catch-up sync with polypolarism main:
   dependabot PRs: typescript-eslint 8, vsce 3.7, eslint 8.57, glob 13,
   ts-loader 9.5, webpack 5.107, pygls 2.1.1, lsprotocol 2025.0.0,
   pytest 9.
+- Bundled polypolarism snapshot caught up with upstream `main`
+  (`022c621`). The `--format json` contract the extension consumes
+  (`diagnostics` / `functions`, frame `columns`/`open`/`strict`/`lazy`)
+  is unchanged, so no server-side wiring changed; the refreshed snapshot
+  just carries the upstream analyzer fixes (issues #95–#108), `# type:
+  ignore[PLY###]` diagnostic suppression, and the new `PLW013`
+  (`typing.cast` schema-assertion note) code. README diagnostic-code
+  ranges bumped to `PLY001`–`PLY042` / `PLW001`–`PLW013` to match.
 
 ## 0.1.0
 
