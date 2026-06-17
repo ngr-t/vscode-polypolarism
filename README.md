@@ -9,6 +9,10 @@ Static type checker for Polars DataFrames based on row polymorphism.
 - Diagnostics carry their stable polypolarism code (`PLY###` errors,
   `PLW###` warnings); the code links to the corresponding table in the
   [polypolarism README](https://github.com/ngr-t/polypolarism#diagnostic-codes)
+- Diagnostics point at the precise location: function-level findings mark
+  the `def` name, and typed return-column mismatches underline the
+  offending expression and link to the `declared here` schema field
+  (LSP related information)
 - Files that fail to parse are reported as a syntax-error diagnostic
 - Schema hover: hovering inside a checked function shows polypolarism's
   view of it — per-parameter frames and the declared vs inferred return
@@ -84,7 +88,7 @@ report any type mismatches.
 
 | Kind | Codes | Shown as |
 |---|---|---|
-| Errors | `PLY001`–`PLY042` | Problems panel **Error** |
+| Errors | `PLY001`–`PLY043` | Problems panel **Error** |
 | Warnings | `PLW001`–`PLW013` | Problems panel **Warning** |
 
 Each diagnostic's code links to its description in the polypolarism

@@ -14,6 +14,12 @@ Catch-up sync with polypolarism main:
   function-name token, so the squiggle marks the definition rather than
   every line. Diagnostics that do not start on a `def` line keep their
   reported range, so any finer span polypolarism emits later renders as-is.
+- Typed return-column mismatches (e.g. `PLY040`) now point at the precise
+  inferred-side expression polypolarism reports (per-column spans, issue
+  #110) instead of the whole function, and their `declared here` schema
+  location is surfaced as LSP **related information** (visible in the
+  Problems panel and on the diagnostic). The `related` array is read
+  additively, so diagnostics without one are unaffected.
 - Multi-file JSON output: the per-diagnostic `file` field is respected,
   so diagnostics are never attributed to the wrong document.
 - Parse/read failures (now emitted by the CLI as failing CheckResults,

@@ -12,6 +12,8 @@ from .lsp_test_client import constants, defaults, session, utils
 
 TEST_FILE_PATH = constants.TEST_DATA / "sample1" / "sample.py"
 TEST_FILE_URI = utils.as_uri(str(TEST_FILE_PATH))
+TEST_FILE2_PATH = constants.TEST_DATA / "sample2" / "sample.py"
+TEST_FILE2_URI = utils.as_uri(str(TEST_FILE2_PATH))
 TIMEOUT = 30  # seconds
 
 ERROR_CODES_HREF = "https://github.com/ngr-t/polypolarism#diagnostic-codes"
@@ -151,3 +153,68 @@ def test_schema_hover():
             }
         )
         assert_that(outside is None, is_(True))
+
+
+def test_typed_mismatch_related_information():
+    """A typed return-column mismatch (PLY040) is reported with a precise
+    inferred-side span and a `declared here` related location, sourced from
+    polypolarism's per-column spans and `related` JSON (issue #110)."""
+    contents = TEST_FILE2_PATH.read_text()
+
+    actual = []
+    with session.LspSession() as ls_session:
+        ls_session.initialize(defaults.VSCODE_DEFAULT_INITIALIZE)
+
+        done = Event()
+
+        def _handler(params):
+            nonlocal actual
+            actual = params
+            done.set()
+
+        ls_session.set_notification_callback(session.PUBLISH_DIAGNOSTICS, _handler)
+        ls_session.notify_did_open(
+            {
+                "textDocument": {
+                    "uri": TEST_FILE2_URI,
+                    "languageId": "python",
+                    "version": 1,
+                    "text": contents,
+                }
+            }
+        )
+        done.wait(TIMEOUT)
+
+    diagnostics = actual["diagnostics"]
+    assert_that(len(diagnostics), is_(1))
+    diagnostic = diagnostics[0]
+    assert_that(diagnostic["code"], is_("PLY040"))
+    assert_that(diagnostic["severity"], is_(1))  # Error
+
+    # Precise inferred-side span: the `pl.col("value").sum()` expression on the
+    # return line (line 20, 1-indexed -> 19), not the whole function body.
+    assert_that(
+        diagnostic["range"],
+        is_(
+            {
+                "start": {"line": 19, "character": 27},
+                "end": {"line": 19, "character": 48},
+            }
+        ),
+    )
+
+    # `declared here` related location points at the schema field `total: int`
+    # (line 16, 1-indexed -> 15) in the same document.
+    related = diagnostic["relatedInformation"]
+    assert_that(len(related), is_(1))
+    assert_that(related[0]["message"], is_("declared here"))
+    assert_that(related[0]["location"]["uri"], is_(TEST_FILE2_URI))
+    assert_that(
+        related[0]["location"]["range"],
+        is_(
+            {
+                "start": {"line": 15, "character": 4},
+                "end": {"line": 15, "character": 14},
+            }
+        ),
+    )

@@ -248,6 +248,35 @@ def _to_range(
     )
 
 
+def _related_information(
+    diag_data: dict, document_uri: Optional[str]
+) -> Optional[list[lsp.DiagnosticRelatedInformation]]:
+    """Map a diagnostic's `related` array onto LSP related information.
+
+    polypolarism attaches secondary locations to column mismatches (e.g. the
+    `declared here` schema field for a return-type mismatch). Each entry is
+    shaped like a primary range (`line`, `column`, optional `end_line` /
+    `end_column`, `message`) and may carry its own `file`; without one it
+    refers to the document being linted. Related ranges are rendered verbatim
+    (no `def`-name narrowing) so they point exactly where polypolarism says.
+    """
+    items: list[lsp.DiagnosticRelatedInformation] = []
+    for rel in diag_data.get("related", []):
+        uri = document_uri
+        rel_file = rel.get("file")
+        if rel_file is not None:
+            uri = uris.from_fs_path(rel_file)
+        if uri is None:
+            continue
+        items.append(
+            lsp.DiagnosticRelatedInformation(
+                location=lsp.Location(uri=uri, range=_to_range(rel)),
+                message=rel.get("message", ""),
+            )
+        )
+    return items or None
+
+
 def _parse_json_output(
     content: str,
     document_path: str,
@@ -289,6 +318,7 @@ def _parse_json_output(
                 code=code,
                 code_description=_code_description(code),
                 source=TOOL_MODULE,
+                related_information=_related_information(diag_data, document_uri),
             )
             diagnostics.append(diagnostic)
     except json.JSONDecodeError as e:
