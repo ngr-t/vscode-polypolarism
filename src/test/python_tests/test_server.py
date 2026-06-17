@@ -52,15 +52,17 @@ def test_linting_example():
         done.wait(TIMEOUT)
 
         # `[PLY###]` / `[PLW###]` message prefixes are extracted into the
-        # diagnostic `code`; `severity` routes errors vs warnings; ranges
-        # span the function body reported by `--format json`.
+        # diagnostic `code`; `severity` routes errors vs warnings; the
+        # function-spanning range `--format json` reports is narrowed onto
+        # the `def` name token so the squiggle marks the definition, not the
+        # whole body (here `process` / `smooth` on their `def` lines).
         expected = {
             "uri": TEST_FILE_URI,
             "diagnostics": [
                 {
                     "range": {
-                        "start": {"line": 18, "character": 0},
-                        "end": {"line": 19, "character": 0},
+                        "start": {"line": 18, "character": 4},
+                        "end": {"line": 18, "character": 11},
                     },
                     "message": (
                         "column 'amount' is not declared in schema "
@@ -77,8 +79,8 @@ def test_linting_example():
                 },
                 {
                     "range": {
-                        "start": {"line": 22, "character": 0},
-                        "end": {"line": 23, "character": 0},
+                        "start": {"line": 22, "character": 4},
+                        "end": {"line": 22, "character": 10},
                     },
                     "message": (
                         "`.interpolate()` is not modeled by polypolarism — "

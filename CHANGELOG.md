@@ -9,6 +9,11 @@ Catch-up sync with polypolarism main:
   table in the polypolarism README from the Problems panel.
 - Diagnostic ranges span the reported `end_line` / `end_column` instead
   of collapsing to a zero-width position.
+- Function-level diagnostics no longer underline the whole function body:
+  when a diagnostic starts on a `def` line, its range is narrowed onto the
+  function-name token, so the squiggle marks the definition rather than
+  every line. Diagnostics that do not start on a `def` line keep their
+  reported range, so any finer span polypolarism emits later renders as-is.
 - Multi-file JSON output: the per-diagnostic `file` field is respected,
   so diagnostics are never attributed to the wrong document.
 - Parse/read failures (now emitted by the CLI as failing CheckResults,

@@ -65,6 +65,12 @@ TOOL_ARGS = ["--format", "json"]
 # or `[PLW###]` (warning) prefix. Extract it into the LSP `code` field.
 DIAGNOSTIC_CODE_RE = re.compile(r"^\[(PL[YW]\d{3})\]\s*")
 
+# polypolarism anchors function-level diagnostics to the whole function span
+# (the `def` line through the function's last line). Underlining every line is
+# visually noisy, so when a diagnostic starts on a `def` line we collapse its
+# range onto the function-name token. Group 1 is the function name.
+DEF_NAME_RE = re.compile(r"^\s*(?:async\s+)?def\s+(\w+)")
+
 # README anchors for the diagnostic-code tables (PLY### / PLW###).
 ERROR_CODES_HREF = "https://github.com/ngr-t/polypolarism#diagnostic-codes"
 WARNING_CODES_HREF = (
@@ -175,7 +181,12 @@ def _linting_helper(document: TextDocument) -> list[lsp.Diagnostic]:
     """Run polypolarism and parse JSON output."""
     result = _run_tool_on_document(document)
     if result and result.stdout:
-        return _parse_json_output(result.stdout, document.path, document.uri)
+        return _parse_json_output(
+            result.stdout,
+            document.path,
+            document.uri,
+            document.source.splitlines(),
+        )
     return []
 
 
@@ -200,11 +211,30 @@ def _code_description(code: Optional[str]) -> Optional[lsp.CodeDescription]:
     return lsp.CodeDescription(href=ERROR_CODES_HREF)
 
 
-def _to_range(diag_data: dict) -> lsp.Range:
-    """Build the LSP range from a polypolarism JSON diagnostic."""
+def _to_range(
+    diag_data: dict, source_lines: Optional[Sequence[str]] = None
+) -> lsp.Range:
+    """Build the LSP range from a polypolarism JSON diagnostic.
+
+    Function-level diagnostics span the whole function body, which underlines
+    the entire definition. When the start line is a `def`, narrow the range to
+    just the function-name token so the squiggle points at the definition
+    instead of the body. Diagnostics that do not start on a `def` line (parse
+    errors, or any finer span polypolarism may emit later) keep their reported
+    range verbatim.
+    """
     # polypolarism uses 1-indexed lines, LSP uses 0-indexed
     line = max(diag_data.get("line", 1) - 1, 0)
     column = diag_data.get("column", 0)
+
+    if source_lines is not None and 0 <= line < len(source_lines):
+        match = DEF_NAME_RE.match(source_lines[line])
+        if match is not None:
+            return lsp.Range(
+                start=lsp.Position(line=line, character=match.start(1)),
+                end=lsp.Position(line=line, character=match.end(1)),
+            )
+
     # Use end_line if available, otherwise use same line
     end_line = diag_data.get("end_line")
     if end_line is not None:
@@ -219,7 +249,10 @@ def _to_range(diag_data: dict) -> lsp.Range:
 
 
 def _parse_json_output(
-    content: str, document_path: str, document_uri: Optional[str] = None
+    content: str,
+    document_path: str,
+    document_uri: Optional[str] = None,
+    source_lines: Optional[Sequence[str]] = None,
 ) -> list[lsp.Diagnostic]:
     """Parse polypolarism JSON output into LSP diagnostics."""
     diagnostics: list[lsp.Diagnostic] = []
@@ -250,7 +283,7 @@ def _parse_json_output(
             code, message = _split_code(diag_data.get("message", "Unknown error"))
 
             diagnostic = lsp.Diagnostic(
-                range=_to_range(diag_data),
+                range=_to_range(diag_data, source_lines),
                 message=message,
                 severity=_get_severity(diag_data.get("severity", "error")),
                 code=code,
