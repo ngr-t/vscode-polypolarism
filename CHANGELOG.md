@@ -20,6 +20,19 @@ Catch-up sync with polypolarism main:
   location is surfaced as LSP **related information** (visible in the
   Problems panel and on the diagnostic). The `related` array is read
   additively, so diagnostics without one are unaffected.
+- **QuickFix code actions** (D-11b): the lightbulb now offers concrete
+  edits for polypolarism diagnostics.
+  - `PLY042` ("column not declared in schema `S`"): rewrite the offending
+    `DataFrame[S]` / `LazyFrame[S]` parameter annotation to a bare
+    `pl.DataFrame` / `pl.LazyFrame` (a row-polymorphic helper).
+  - `PLY040` (typed return-column mismatch): rewrite the declared schema
+    field to the inferred dtype (e.g. `total: int` → `total: pl.Float64`),
+    located via the diagnostic's same-file `declared here` related entry.
+  Edit targets are found by parsing the document with `ast`, so ranges are
+  exact; when the annotation/field cannot be resolved unambiguously (no
+  polars import, cross-file schema, complex dtype) no action is offered
+  rather than risking a wrong edit. `textDocument/rename` is intentionally
+  not provided yet (see README).
 - Multi-file JSON output: the per-diagnostic `file` field is respected,
   so diagnostics are never attributed to the wrong document.
 - Parse/read failures (now emitted by the CLI as failing CheckResults,

@@ -4,6 +4,7 @@
 """Implementation of polypolarism support over LSP."""
 from __future__ import annotations
 
+import ast
 import copy
 import json
 import os
@@ -87,6 +88,7 @@ def did_open(params: lsp.DidOpenTextDocumentParams) -> None:
     """LSP handler for textDocument/didOpen request."""
     document = LSP_SERVER.workspace.text_documents.get(params.text_document.uri)
     diagnostics: list[lsp.Diagnostic] = _linting_helper(document)
+    DOCUMENT_DIAGNOSTICS[document.uri] = diagnostics
     # pygls 2.0: takes PublishDiagnosticsParams object
     LSP_SERVER.text_document_publish_diagnostics(
         lsp.PublishDiagnosticsParams(uri=document.uri, diagnostics=diagnostics)
@@ -98,6 +100,7 @@ def did_save(params: lsp.DidSaveTextDocumentParams) -> None:
     """LSP handler for textDocument/didSave request."""
     document = LSP_SERVER.workspace.text_documents.get(params.text_document.uri)
     diagnostics: list[lsp.Diagnostic] = _linting_helper(document)
+    DOCUMENT_DIAGNOSTICS[document.uri] = diagnostics
     # pygls 2.0: takes PublishDiagnosticsParams object
     LSP_SERVER.text_document_publish_diagnostics(
         lsp.PublishDiagnosticsParams(uri=document.uri, diagnostics=diagnostics)
@@ -114,12 +117,18 @@ def did_close(params: lsp.DidCloseTextDocumentParams) -> None:
         lsp.PublishDiagnosticsParams(uri=document.uri, diagnostics=[])
     )
     FUNCTION_SUMMARIES.pop(document.uri, None)
+    DOCUMENT_DIAGNOSTICS.pop(document.uri, None)
 
 
 # Per-document cache of polypolarism's per-function schema summaries
 # (the `functions` array of --format json), refreshed on every lint run.
 # Consumed by the hover handler — D-11.
 FUNCTION_SUMMARIES: dict[str, list] = {}
+
+# Per-document cache of the diagnostics we last published, keyed by URI.
+# Full-fidelity (codes, precise ranges, `relatedInformation`), so the
+# code-action provider can drive QuickFix edits off them — D-11b.
+DOCUMENT_DIAGNOSTICS: dict[str, list[lsp.Diagnostic]] = {}
 
 
 @LSP_SERVER.feature(lsp.TEXT_DOCUMENT_HOVER)
@@ -175,6 +184,238 @@ def _render_function_hover(fn: dict) -> str:
         lines.append("")
         lines.append("_open frame: may carry extra columns beyond the listed ones_")
     return "\n".join(lines)
+
+
+# **********************************************************
+# Code action (QuickFix) feature — D-11b
+# **********************************************************
+# polypolarism's diagnostics name the schema / column / inferred dtype in
+# their message; the location of the *thing to edit* (the parameter
+# annotation, or the declared schema field) is recovered here by parsing the
+# document with `ast`, so no core JSON change is required to ship these fixes.
+#
+# Rename (textDocument/rename) is intentionally NOT registered: column names
+# are runtime strings whose occurrences need scope tracking polypolarism does
+# not expose today, and Pylance already renames Python symbols. Advertising a
+# rename we cannot resolve safely would only risk wrong edits. See the D-11b
+# report / core requests for what core JSON would unlock it.
+
+# polypolarism messages are stable enough to extract the operands from.
+_SCHEMA_RE = re.compile(r"schema '([^']+)'")
+_INFERRED_TYPE_RE = re.compile(r"has type (\w+)")
+
+
+def _pos_le(a: lsp.Position, b: lsp.Position) -> bool:
+    return (a.line, a.character) <= (b.line, b.character)
+
+
+def _ranges_overlap(a: lsp.Range, b: lsp.Range) -> bool:
+    """True if two LSP ranges intersect (inclusive)."""
+    return _pos_le(a.start, b.end) and _pos_le(b.start, a.end)
+
+
+def _ast_range(node: ast.AST) -> Optional[lsp.Range]:
+    """LSP range for an AST node (1-indexed lines -> 0-indexed)."""
+    end_lineno = getattr(node, "end_lineno", None)
+    end_col = getattr(node, "end_col_offset", None)
+    if end_lineno is None or end_col is None:
+        return None
+    return lsp.Range(
+        start=lsp.Position(line=node.lineno - 1, character=node.col_offset),
+        end=lsp.Position(line=end_lineno - 1, character=end_col),
+    )
+
+
+def _polars_alias(tree: ast.Module) -> Optional[str]:
+    """The alias `polars` is imported under (e.g. `pl`), or None if absent."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for name in node.names:
+                if name.name == "polars":
+                    return name.asname or "polars"
+    return None
+
+
+def _def_at_line(tree: ast.Module, line: int) -> Optional[ast.AST]:
+    """The function definition starting on `line` (1-indexed), if any."""
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.lineno == line
+        ):
+            return node
+    return None
+
+
+def _annassign_at_line(tree: ast.Module, line: int) -> Optional[ast.AnnAssign]:
+    """The annotated assignment (schema field) starting on `line`."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AnnAssign) and node.lineno == line:
+            return node
+    return None
+
+
+def _frame_kind(value: ast.AST) -> Optional[str]:
+    """`DataFrame` / `LazyFrame` if `value` names one, else None."""
+    name = None
+    if isinstance(value, ast.Name):
+        name = value.id
+    elif isinstance(value, ast.Attribute):
+        name = value.attr
+    return name if name in ("DataFrame", "LazyFrame") else None
+
+
+def _subscript_schema(slice_node: ast.AST) -> Optional[str]:
+    """Schema name from a `DataFrame[Schema]` subscript (py3.9+ slice)."""
+    if isinstance(slice_node, ast.Name):
+        return slice_node.id
+    if isinstance(slice_node, ast.Attribute):
+        return slice_node.attr
+    return None
+
+
+def _frame_param(funcdef: ast.AST, schema_name: str):
+    """Find a parameter annotated ``DataFrame[schema_name]`` /
+    ``LazyFrame[schema_name]``. Returns ``(param_name, kind, annotation)``."""
+    arguments = funcdef.args
+    args = (
+        list(arguments.posonlyargs) + list(arguments.args) + list(arguments.kwonlyargs)
+    )
+    for arg in args:
+        ann = arg.annotation
+        if not isinstance(ann, ast.Subscript):
+            continue
+        kind = _frame_kind(ann.value)
+        if kind is not None and _subscript_schema(ann.slice) == schema_name:
+            return arg.arg, kind, ann
+    return None
+
+
+def _bare_param_fix(
+    diag: lsp.Diagnostic, tree: ast.Module, alias: str, uri: str, code: str
+) -> Optional[lsp.CodeAction]:
+    """QuickFix for "column not declared in schema 'S'" (PLY042): drop the
+    schema from the offending parameter, making it a bare ``pl.DataFrame``
+    (a row-polymorphic helper that admits any extra columns)."""
+    schema_match = _SCHEMA_RE.search(diag.message)
+    if schema_match is None or "not declared" not in diag.message:
+        return None
+    # The diagnostic is narrowed onto the `def` name token (its start line is
+    # the function's def line).
+    funcdef = _def_at_line(tree, diag.range.start.line + 1)
+    if funcdef is None:
+        return None
+    found = _frame_param(funcdef, schema_match.group(1))
+    if found is None:
+        return None
+    param, kind, annotation = found
+    ann_range = _ast_range(annotation)
+    if ann_range is None:
+        return None
+    new_text = f"{alias}.{kind}"
+    return lsp.CodeAction(
+        title=f"[{code}] parameter '{param}' -> bare {new_text} (row-polymorphic)",
+        kind=lsp.CodeActionKind.QuickFix,
+        diagnostics=[diag],
+        edit=lsp.WorkspaceEdit(
+            changes={uri: [lsp.TextEdit(range=ann_range, new_text=new_text)]}
+        ),
+        is_preferred=True,
+    )
+
+
+def _retype_declared_fix(
+    diag: lsp.Diagnostic, tree: ast.Module, alias: str, uri: str, code: str
+) -> Optional[lsp.CodeAction]:
+    """QuickFix for a typed return-column mismatch (PLY040): rewrite the
+    declared schema field to the inferred dtype. The field's location comes
+    from the diagnostic's same-file ``declared here`` related entry; the
+    annotation sub-range is found with `ast`."""
+    inferred_match = _INFERRED_TYPE_RE.search(diag.message)
+    if inferred_match is None or "declared type" not in diag.message:
+        return None
+    inferred = inferred_match.group(1)
+    if not inferred.isidentifier():
+        return None  # complex dtype (List[...], Struct) — don't guess
+    if not diag.related_information:
+        return None
+    target = next((r for r in diag.related_information if r.location.uri == uri), None)
+    if target is None:
+        return None  # declared field is in another file we can't safely edit
+    field = _annassign_at_line(tree, target.location.range.start.line + 1)
+    if field is None or field.annotation is None:
+        return None
+    ann_range = _ast_range(field.annotation)
+    if ann_range is None:
+        return None
+    new_text = f"{alias}.{inferred}"
+    return lsp.CodeAction(
+        title=f"[{code}] declared type -> {new_text} (match inferred)",
+        kind=lsp.CodeActionKind.QuickFix,
+        diagnostics=[diag],
+        edit=lsp.WorkspaceEdit(
+            changes={uri: [lsp.TextEdit(range=ann_range, new_text=new_text)]}
+        ),
+    )
+
+
+def _quick_fixes_for(
+    diag: lsp.Diagnostic, tree: ast.Module, alias: Optional[str], uri: str
+) -> list[lsp.CodeAction]:
+    """All QuickFixes applicable to a single polypolarism diagnostic."""
+    if diag.source != TOOL_MODULE or not diag.code or alias is None:
+        # Every fix we offer writes `alias.DataFrame` / `alias.<dtype>`, so a
+        # missing polars import means we cannot produce a sound edit.
+        return []
+    code = str(diag.code)
+    actions: list[lsp.CodeAction] = []
+    for builder in (_bare_param_fix, _retype_declared_fix):
+        action = builder(diag, tree, alias, uri, code)
+        if action is not None:
+            actions.append(action)
+    return actions
+
+
+@LSP_SERVER.feature(
+    lsp.TEXT_DOCUMENT_CODE_ACTION,
+    lsp.CodeActionOptions(code_action_kinds=[lsp.CodeActionKind.QuickFix]),
+)
+def code_action(params: lsp.CodeActionParams) -> Optional[list[lsp.CodeAction]]:
+    """QuickFix provider (D-11b): concrete edits for the polypolarism
+    diagnostics overlapping the requested range."""
+    only = params.context.only
+    if only is not None and lsp.CodeActionKind.QuickFix not in only:
+        return None
+
+    uri = params.text_document.uri
+    document = LSP_SERVER.workspace.text_documents.get(uri)
+    if document is None:
+        return None
+
+    # Prefer our own cache (full fidelity incl. `relatedInformation`); fall
+    # back to the diagnostics the client echoes in the request context.
+    cached = DOCUMENT_DIAGNOSTICS.get(uri)
+    if cached:
+        diagnostics = [d for d in cached if _ranges_overlap(d.range, params.range)]
+    else:
+        diagnostics = [
+            d
+            for d in params.context.diagnostics
+            if d.source == TOOL_MODULE and _ranges_overlap(d.range, params.range)
+        ]
+    if not diagnostics:
+        return None
+
+    try:
+        tree = ast.parse(document.source)
+    except SyntaxError:
+        return None
+    alias = _polars_alias(tree)
+
+    actions: list[lsp.CodeAction] = []
+    for diag in diagnostics:
+        actions.extend(_quick_fixes_for(diag, tree, alias, uri))
+    return actions or None
 
 
 def _linting_helper(document: TextDocument) -> list[lsp.Diagnostic]:

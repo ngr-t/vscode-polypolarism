@@ -17,6 +17,13 @@ Static type checker for Polars DataFrames based on row polymorphism.
 - Schema hover: hovering inside a checked function shows polypolarism's
   view of it — per-parameter frames and the declared vs inferred return
   frames (an `...` marks open frames that may carry extra columns)
+- QuickFix code actions: the lightbulb offers concrete edits for some
+  diagnostics — make an over-constrained parameter a bare `pl.DataFrame`
+  (`PLY042`), or align a declared schema field with the inferred dtype
+  (`PLY040`). Fixes are only offered when the edit can be resolved
+  unambiguously. Symbol rename (`textDocument/rename`) is not provided
+  yet — column names are runtime strings that need scope tracking the
+  checker does not expose, and Pylance already renames Python symbols.
 - Checks on file open and save
 
 ## Requirements

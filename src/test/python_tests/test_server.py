@@ -218,3 +218,64 @@ def test_typed_mismatch_related_information():
             }
         ),
     )
+
+
+def test_quickfix_bare_param():
+    """QuickFix (D-11b): a PLY042 "column not declared in schema" diagnostic
+    offers a code action that rewrites the offending `DataFrame[Schema]`
+    parameter annotation to a bare `pl.DataFrame` (row-polymorphic helper)."""
+    contents = TEST_FILE_PATH.read_text()
+
+    with session.LspSession() as ls_session:
+        ls_session.initialize(defaults.VSCODE_DEFAULT_INITIALIZE)
+
+        done = Event()
+        ls_session.set_notification_callback(
+            session.PUBLISH_DIAGNOSTICS, lambda _params: done.set()
+        )
+        ls_session.notify_did_open(
+            {
+                "textDocument": {
+                    "uri": TEST_FILE_URI,
+                    "languageId": "python",
+                    "version": 1,
+                    "text": contents,
+                }
+            }
+        )
+        done.wait(TIMEOUT)
+
+        # PLY042 is reported on the `process` def line (line 19, 1-indexed ->
+        # 18). Request quick fixes over that line.
+        actions = ls_session.text_document_code_action(
+            {
+                "textDocument": {"uri": TEST_FILE_URI},
+                "range": {
+                    "start": {"line": 18, "character": 4},
+                    "end": {"line": 18, "character": 11},
+                },
+                "context": {"diagnostics": [], "only": ["quickfix"]},
+            }
+        )
+
+    assert_that(actions is not None, is_(True))
+    bare = [
+        a
+        for a in actions
+        if a.get("kind") == "quickfix" and "PLY042" in a.get("title", "")
+    ]
+    assert_that(len(bare), is_(1))
+    action = bare[0]
+    assert_that(action["isPreferred"], is_(True))
+
+    edits = action["edit"]["changes"][TEST_FILE_URI]
+    assert_that(len(edits), is_(1))
+    edit = edits[0]
+    assert_that(edit["newText"], is_("pl.DataFrame"))
+
+    # The replaced span must be exactly the `DataFrame[InputSchema]` annotation.
+    start, end = edit["range"]["start"], edit["range"]["end"]
+    assert_that(start["line"], is_(18))
+    assert_that(end["line"], is_(18))
+    replaced = contents.splitlines()[18][start["character"] : end["character"]]
+    assert_that(replaced, is_("DataFrame[InputSchema]"))
