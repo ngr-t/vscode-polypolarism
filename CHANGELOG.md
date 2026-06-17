@@ -25,14 +25,22 @@ Catch-up sync with polypolarism main:
   - `PLY042` ("column not declared in schema `S`"): rewrite the offending
     `DataFrame[S]` / `LazyFrame[S]` parameter annotation to a bare
     `pl.DataFrame` / `pl.LazyFrame` (a row-polymorphic helper).
-  - `PLY040` (typed return-column mismatch): rewrite the declared schema
-    field to the inferred dtype (e.g. `total: int` → `total: pl.Float64`),
-    located via the diagnostic's same-file `declared here` related entry.
-  Edit targets are found by parsing the document with `ast`, so ranges are
-  exact; when the annotation/field cannot be resolved unambiguously (no
-  polars import, cross-file schema, complex dtype) no action is offered
-  rather than risking a wrong edit. `textDocument/rename` is intentionally
-  not provided yet (see README).
+  - `PLY040` typed return-column mismatch: rewrite the already-declared
+    schema field to the inferred dtype (e.g. `total: int` →
+    `total: pl.Float64`), located via the diagnostic's same-file
+    `declared here` related entry.
+  - `PLY040` undeclared extra return column ("Extra column `X` of type
+    `T`"): declare the column on the strict return schema (insert
+    `X: pl.T` at the end of the schema body).
+  Diagnostic operands are read from the structured fields polypolarism now
+  stamps on each diagnostic (`column_name` / `schema` / `declared_type` /
+  `inferred_type`, carried through LSP `Diagnostic.data`), with message
+  parsing only as a fallback. Edit targets (the parameter annotation, the
+  schema class/field) are located by parsing the document with `ast`, so
+  ranges are exact; when an edit cannot be resolved unambiguously (no
+  polars import, cross-file schema, undeclared column with unknown dtype,
+  complex dtype) no action is offered rather than risking a wrong edit.
+  `textDocument/rename` is intentionally not provided yet (see README).
 - Multi-file JSON output: the per-diagnostic `file` field is respected,
   so diagnostics are never attributed to the wrong document.
 - Parse/read failures (now emitted by the CLI as failing CheckResults,

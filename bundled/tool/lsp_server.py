@@ -200,9 +200,24 @@ def _render_function_hover(fn: dict) -> str:
 # rename we cannot resolve safely would only risk wrong edits. See the D-11b
 # report / core requests for what core JSON would unlock it.
 
-# polypolarism messages are stable enough to extract the operands from.
+# Structured operands polypolarism stamps onto diagnostics (never parsed from
+# the message). Carried through `Diagnostic.data` so the code-action provider
+# can drive fixes off them; the regexes below are message-parsing fallbacks
+# for any diagnostic that predates / omits the structured fields.
+_STRUCTURED_KEYS = ("column_name", "schema", "declared_type", "inferred_type")
 _SCHEMA_RE = re.compile(r"schema '([^']+)'")
 _INFERRED_TYPE_RE = re.compile(r"has type (\w+)")
+
+
+def _structured_data(diag_data: dict) -> Optional[dict]:
+    """Lift polypolarism's structured operand fields into a `data` dict."""
+    data = {key: diag_data[key] for key in _STRUCTURED_KEYS if key in diag_data}
+    return data or None
+
+
+def _diag_data(diag: lsp.Diagnostic) -> dict:
+    """The structured operands carried on a diagnostic (empty if none)."""
+    return diag.data if isinstance(diag.data, dict) else {}
 
 
 def _pos_le(a: lsp.Position, b: lsp.Position) -> bool:
@@ -291,21 +306,61 @@ def _frame_param(funcdef: ast.AST, schema_name: str):
     return None
 
 
+def _class_def(tree: ast.Module, name: str) -> Optional[ast.ClassDef]:
+    """The schema class definition named `name`, if in this document."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == name:
+            return node
+    return None
+
+
+def _enclosing_function(tree: ast.Module, line: int) -> Optional[ast.AST]:
+    """Innermost function whose body spans `line` (1-indexed)."""
+    best = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = getattr(node, "end_lineno", node.lineno)
+            if node.lineno <= line <= end and (
+                best is None or node.lineno > best.lineno
+            ):
+                best = node
+    return best
+
+
+def _return_schema(funcdef: ast.AST) -> Optional[str]:
+    """Schema name from a ``-> DataFrame[Schema]`` return annotation."""
+    ann = getattr(funcdef, "returns", None)
+    if isinstance(ann, ast.Subscript) and _frame_kind(ann.value) is not None:
+        return _subscript_schema(ann.slice)
+    return None
+
+
+def _last_field(classdef: ast.ClassDef) -> Optional[ast.AnnAssign]:
+    """The last top-level annotated field of a schema class, if any."""
+    fields = [n for n in classdef.body if isinstance(n, ast.AnnAssign)]
+    return fields[-1] if fields else None
+
+
 def _bare_param_fix(
     diag: lsp.Diagnostic, tree: ast.Module, alias: str, uri: str, code: str
 ) -> Optional[lsp.CodeAction]:
     """QuickFix for "column not declared in schema 'S'" (PLY042): drop the
     schema from the offending parameter, making it a bare ``pl.DataFrame``
     (a row-polymorphic helper that admits any extra columns)."""
-    schema_match = _SCHEMA_RE.search(diag.message)
-    if schema_match is None or "not declared" not in diag.message:
+    if "not declared" not in diag.message:
+        return None
+    schema_name = _diag_data(diag).get("schema")
+    if schema_name is None:
+        match = _SCHEMA_RE.search(diag.message)
+        schema_name = match.group(1) if match is not None else None
+    if schema_name is None:
         return None
     # The diagnostic is narrowed onto the `def` name token (its start line is
     # the function's def line).
     funcdef = _def_at_line(tree, diag.range.start.line + 1)
     if funcdef is None:
         return None
-    found = _frame_param(funcdef, schema_match.group(1))
+    found = _frame_param(funcdef, schema_name)
     if found is None:
         return None
     param, kind, annotation = found
@@ -327,16 +382,21 @@ def _bare_param_fix(
 def _retype_declared_fix(
     diag: lsp.Diagnostic, tree: ast.Module, alias: str, uri: str, code: str
 ) -> Optional[lsp.CodeAction]:
-    """QuickFix for a typed return-column mismatch (PLY040): rewrite the
-    declared schema field to the inferred dtype. The field's location comes
-    from the diagnostic's same-file ``declared here`` related entry; the
-    annotation sub-range is found with `ast`."""
-    inferred_match = _INFERRED_TYPE_RE.search(diag.message)
-    if inferred_match is None or "declared type" not in diag.message:
+    """QuickFix for a typed return-column mismatch (PLY040, ``TypeDifference``):
+    rewrite the already-declared schema field to the inferred dtype. The field
+    location comes from the diagnostic's same-file ``declared here`` related
+    entry; the annotation sub-range is found with `ast`."""
+    data = _diag_data(diag)
+    inferred = data.get("inferred_type")
+    if inferred is None:
+        match = _INFERRED_TYPE_RE.search(diag.message)
+        inferred = match.group(1) if match is not None else None
+    if inferred is None or not inferred.isidentifier():
+        return None  # missing / complex dtype (List[...], Struct) — don't guess
+    # Only a genuine mismatch on an *already declared* column (declared_type
+    # present, or the legacy message) — not an undeclared extra column.
+    if data.get("declared_type") is None and "declared type" not in diag.message:
         return None
-    inferred = inferred_match.group(1)
-    if not inferred.isidentifier():
-        return None  # complex dtype (List[...], Struct) — don't guess
     if not diag.related_information:
         return None
     target = next((r for r in diag.related_information if r.location.uri == uri), None)
@@ -359,6 +419,51 @@ def _retype_declared_fix(
     )
 
 
+def _declare_column_fix(
+    diag: lsp.Diagnostic, tree: ast.Module, alias: str, uri: str, code: str
+) -> Optional[lsp.CodeAction]:
+    """QuickFix for an *undeclared* column whose dtype is known (e.g. a strict
+    schema's extra return column, PLY040 "Extra column 'X' of type T"): declare
+    it on the target schema. This is an insertion, not a retype — gated on the
+    column not already being declared, so it never duplicates a field."""
+    data = _diag_data(diag)
+    column = data.get("column_name")
+    dtype = data.get("inferred_type")
+    if column is None or dtype is None or data.get("declared_type") is not None:
+        return None
+    if not column.isidentifier() or not dtype.isidentifier():
+        return None
+    # Target schema: named on the diagnostic (PLY042), else the enclosing
+    # function's declared return schema (extra-return-column case).
+    schema_name = data.get("schema")
+    if schema_name is None:
+        func = _enclosing_function(tree, diag.range.start.line + 1)
+        schema_name = _return_schema(func) if func is not None else None
+    if schema_name is None:
+        return None
+    classdef = _class_def(tree, schema_name)
+    if classdef is None:
+        return None  # schema declared in another file — needs core `schema_file`
+    anchor = _last_field(classdef)
+    if anchor is None:
+        return None  # no field to anchor onto — don't risk a malformed insert
+    anchor_range = _ast_range(anchor)
+    if anchor_range is None:
+        return None
+    indent = " " * anchor.col_offset
+    point = lsp.Range(start=anchor_range.end, end=anchor_range.end)
+    new_text = f"\n{indent}{column}: {alias}.{dtype}"
+    return lsp.CodeAction(
+        title=f"[{code}] declare column '{column}' as {alias}.{dtype} in {schema_name}",
+        kind=lsp.CodeActionKind.QuickFix,
+        diagnostics=[diag],
+        edit=lsp.WorkspaceEdit(
+            changes={uri: [lsp.TextEdit(range=point, new_text=new_text)]}
+        ),
+        is_preferred=True,
+    )
+
+
 def _quick_fixes_for(
     diag: lsp.Diagnostic, tree: ast.Module, alias: Optional[str], uri: str
 ) -> list[lsp.CodeAction]:
@@ -369,7 +474,7 @@ def _quick_fixes_for(
         return []
     code = str(diag.code)
     actions: list[lsp.CodeAction] = []
-    for builder in (_bare_param_fix, _retype_declared_fix):
+    for builder in (_bare_param_fix, _retype_declared_fix, _declare_column_fix):
         action = builder(diag, tree, alias, uri, code)
         if action is not None:
             actions.append(action)
@@ -560,6 +665,7 @@ def _parse_json_output(
                 code_description=_code_description(code),
                 source=TOOL_MODULE,
                 related_information=_related_information(diag_data, document_uri),
+                data=_structured_data(diag_data),
             )
             diagnostics.append(diagnostic)
     except json.JSONDecodeError as e:

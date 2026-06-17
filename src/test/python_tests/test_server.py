@@ -14,6 +14,8 @@ TEST_FILE_PATH = constants.TEST_DATA / "sample1" / "sample.py"
 TEST_FILE_URI = utils.as_uri(str(TEST_FILE_PATH))
 TEST_FILE2_PATH = constants.TEST_DATA / "sample2" / "sample.py"
 TEST_FILE2_URI = utils.as_uri(str(TEST_FILE2_PATH))
+TEST_FILE3_PATH = constants.TEST_DATA / "sample3" / "sample.py"
+TEST_FILE3_URI = utils.as_uri(str(TEST_FILE3_PATH))
 TIMEOUT = 30  # seconds
 
 ERROR_CODES_HREF = "https://github.com/ngr-t/polypolarism#diagnostic-codes"
@@ -78,6 +80,7 @@ def test_linting_example():
                     "code": "PLY042",
                     "codeDescription": {"href": ERROR_CODES_HREF},
                     "source": "polypolarism",
+                    "data": {"column_name": "amount", "schema": "InputSchema"},
                 },
                 {
                     "range": {
@@ -279,3 +282,61 @@ def test_quickfix_bare_param():
     assert_that(end["line"], is_(18))
     replaced = contents.splitlines()[18][start["character"] : end["character"]]
     assert_that(replaced, is_("DataFrame[InputSchema]"))
+
+
+def test_quickfix_declare_column():
+    """QuickFix (D-11b): an undeclared extra return column (PLY040 "Extra
+    column 'X' of type T") offers a code action that declares the column on
+    the strict return schema — an insertion at the end of the schema body."""
+    contents = TEST_FILE3_PATH.read_text()
+
+    with session.LspSession() as ls_session:
+        ls_session.initialize(defaults.VSCODE_DEFAULT_INITIALIZE)
+
+        done = Event()
+        ls_session.set_notification_callback(
+            session.PUBLISH_DIAGNOSTICS, lambda _params: done.set()
+        )
+        ls_session.notify_did_open(
+            {
+                "textDocument": {
+                    "uri": TEST_FILE3_URI,
+                    "languageId": "python",
+                    "version": 1,
+                    "text": contents,
+                }
+            }
+        )
+        done.wait(TIMEOUT)
+
+        # PLY040 "Extra column" points at the return expression (line 23,
+        # 1-indexed -> 22). Request quick fixes over that line.
+        actions = ls_session.text_document_code_action(
+            {
+                "textDocument": {"uri": TEST_FILE3_URI},
+                "range": {
+                    "start": {"line": 22, "character": 4},
+                    "end": {"line": 22, "character": 50},
+                },
+                "context": {"diagnostics": [], "only": ["quickfix"]},
+            }
+        )
+
+    assert_that(actions is not None, is_(True))
+    declare = [
+        a
+        for a in actions
+        if a.get("kind") == "quickfix" and "declare column 'extra'" in a.get("title", "")
+    ]
+    assert_that(len(declare), is_(1))
+    action = declare[0]
+    assert_that("Result" in action["title"], is_(True))
+
+    edits = action["edit"]["changes"][TEST_FILE3_URI]
+    assert_that(len(edits), is_(1))
+    edit = edits[0]
+    # A new field line inserted after the last field of `Result` (`value:
+    # pl.Float64` on line 16, 1-indexed -> 15); a zero-width insertion.
+    assert_that(edit["newText"], is_("\n    extra: pl.Float64"))
+    assert_that(edit["range"]["start"], is_(edit["range"]["end"]))
+    assert_that(edit["range"]["start"]["line"], is_(15))
