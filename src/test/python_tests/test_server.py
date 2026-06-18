@@ -18,7 +18,35 @@ TEST_FILE3_PATH = constants.TEST_DATA / "sample3" / "sample.py"
 TEST_FILE3_URI = utils.as_uri(str(TEST_FILE3_PATH))
 TEST_FILE4_PATH = constants.TEST_DATA / "sample4" / "sample.py"
 TEST_FILE4_URI = utils.as_uri(str(TEST_FILE4_PATH))
+TEST_FILE5_PATH = constants.TEST_DATA / "sample5" / "sample.py"
+TEST_FILE5_URI = utils.as_uri(str(TEST_FILE5_PATH))
 TIMEOUT = 30  # seconds
+
+
+def _code_actions(ls_session, uri, contents, request_range):
+    """Open `contents` and return the code actions over `request_range`."""
+    done = Event()
+    ls_session.set_notification_callback(
+        session.PUBLISH_DIAGNOSTICS, lambda _params: done.set()
+    )
+    ls_session.notify_did_open(
+        {
+            "textDocument": {
+                "uri": uri,
+                "languageId": "python",
+                "version": 1,
+                "text": contents,
+            }
+        }
+    )
+    done.wait(TIMEOUT)
+    return ls_session.text_document_code_action(
+        {
+            "textDocument": {"uri": uri},
+            "range": request_range,
+            "context": {"diagnostics": [], "only": ["quickfix"]},
+        }
+    )
 
 ERROR_CODES_HREF = "https://github.com/ngr-t/polypolarism#diagnostic-codes"
 WARNING_CODES_HREF = (
@@ -408,3 +436,82 @@ def test_rename_column():
         for e in edits
     )
     assert_that(spans, is_([(9, 4, 10), (14, 29, 35), (14, 64, 70)]))
+
+
+def test_quickfix_retype_declared():
+    """QuickFix (D-11b): a PLY040 type mismatch offers a "retype the declared
+    field" action sourced from polypolarism's `suggested_annotation` and
+    `declared_annotation_range` (issue #113), editing only the annotation."""
+    contents = TEST_FILE2_PATH.read_text()
+
+    with session.LspSession() as ls_session:
+        ls_session.initialize(defaults.VSCODE_DEFAULT_INITIALIZE)
+        # PLY040 is reported on the return expression (line 20, 1-indexed -> 19).
+        actions = _code_actions(
+            ls_session,
+            TEST_FILE2_URI,
+            contents,
+            {
+                "start": {"line": 19, "character": 27},
+                "end": {"line": 19, "character": 48},
+            },
+        )
+
+    retype = [
+        a
+        for a in actions
+        if a.get("kind") == "quickfix" and "declared type" in a.get("title", "")
+    ]
+    assert_that(len(retype), is_(1))
+    edit = retype[0]["edit"]["changes"][TEST_FILE2_URI][0]
+    assert_that(edit["newText"], is_("pl.Float64"))
+    # Only the annotation (`int` on line 16, 1-indexed -> 15) is replaced.
+    assert_that(
+        edit["range"],
+        is_(
+            {
+                "start": {"line": 15, "character": 11},
+                "end": {"line": 15, "character": 14},
+            }
+        ),
+    )
+    replaced = contents.splitlines()[15][11:14]
+    assert_that(replaced, is_("int"))
+
+
+def test_quickfix_declare_column_ply042():
+    """QuickFix (D-11b): a PLY042 whose undeclared column has a statically known
+    dtype (here pinned by `.cast(pl.Boolean)`) offers a "declare the column"
+    action that inserts the field, using polypolarism's `fix.suggested_dtype`
+    (issue #114)."""
+    contents = TEST_FILE5_PATH.read_text()
+
+    with session.LspSession() as ls_session:
+        ls_session.initialize(defaults.VSCODE_DEFAULT_INITIALIZE)
+        # PLY042 is reported on the `f` def line (line 14, 1-indexed -> 13).
+        actions = _code_actions(
+            ls_session,
+            TEST_FILE5_URI,
+            contents,
+            {
+                "start": {"line": 13, "character": 4},
+                "end": {"line": 13, "character": 5},
+            },
+        )
+
+    declare = [
+        a
+        for a in actions
+        if a.get("kind") == "quickfix"
+        and "declare column 'flag'" in a.get("title", "")
+    ]
+    assert_that(len(declare), is_(1))
+    action = declare[0]
+    assert_that("pl.Boolean" in action["title"], is_(True))
+    assert_that("Src" in action["title"], is_(True))
+
+    edit = action["edit"]["changes"][TEST_FILE5_URI][0]
+    # A new field inserted after `keep: pl.Int64` (line 11, 1-indexed -> 10).
+    assert_that(edit["newText"], is_("\n    flag: pl.Boolean"))
+    assert_that(edit["range"]["start"], is_(edit["range"]["end"]))
+    assert_that(edit["range"]["start"]["line"], is_(10))

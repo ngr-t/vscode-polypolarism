@@ -40,6 +40,11 @@ Catch-up sync with polypolarism main:
   ranges are exact; when an edit cannot be resolved unambiguously (no
   polars import, cross-file schema, undeclared column with unknown dtype,
   complex dtype) no action is offered rather than risking a wrong edit.
+  The retype fix now consumes polypolarism's `suggested_annotation` +
+  `declared_annotation_range` (issue #113) so complex dtypes (e.g.
+  `pl.List(pl.Int64)`) are handled, and the PLY042 "declare the column"
+  fix is now offered whenever the column's dtype is statically known —
+  e.g. pinned by `.cast(T)` — via `fix.suggested_dtype` (issue #114).
 - **Column rename** (D-11b): `textDocument/rename` (with `prepareRename`)
   renames a Polars column across its schema-field declaration and every
   `pl.col("...")` reference that polypolarism proves refers to the same

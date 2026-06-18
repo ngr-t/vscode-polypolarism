@@ -207,14 +207,30 @@ def _render_function_hover(fn: dict) -> str:
 # the message). Carried through `Diagnostic.data` so the code-action provider
 # can drive fixes off them; the regexes below are message-parsing fallbacks
 # for any diagnostic that predates / omits the structured fields.
-_STRUCTURED_KEYS = ("column_name", "schema", "declared_type", "inferred_type")
+_STRUCTURED_KEYS = (
+    "column_name",
+    "schema",
+    "declared_type",
+    "inferred_type",
+    # PLY040 retype fix metadata (issue #113): a ready-to-insert pandera
+    # annotation string + the exact range of the declared annotation.
+    "suggested_annotation",
+    "declared_annotation_range",
+)
 _SCHEMA_RE = re.compile(r"schema '([^']+)'")
 _INFERRED_TYPE_RE = re.compile(r"has type (\w+)")
 
 
 def _structured_data(diag_data: dict) -> Optional[dict]:
-    """Lift polypolarism's structured operand fields into a `data` dict."""
+    """Lift polypolarism's structured operand + fix-hint fields into a `data`
+    dict. Absolute paths from the `fix` object are deliberately left out — the
+    editor resolves the schema class itself — so `data` stays machine-agnostic."""
     data = {key: diag_data[key] for key in _STRUCTURED_KEYS if key in diag_data}
+    fix = diag_data.get("fix")
+    if isinstance(fix, dict) and "suggested_dtype" in fix:
+        # The one fix-object field needed to complete a PLY042 "declare the
+        # column" edit (issue #114); present only when the dtype is static.
+        data["suggested_dtype"] = fix["suggested_dtype"]
     return data or None
 
 
@@ -387,37 +403,49 @@ def _retype_declared_fix(
 ) -> Optional[lsp.CodeAction]:
     """QuickFix for a typed return-column mismatch (PLY040, ``TypeDifference``):
     rewrite the already-declared schema field to the inferred dtype. The field
-    location comes from the diagnostic's same-file ``declared here`` related
-    entry; the annotation sub-range is found with `ast`."""
-    data = _diag_data(diag)
-    inferred = data.get("inferred_type")
-    if inferred is None:
-        match = _INFERRED_TYPE_RE.search(diag.message)
-        inferred = match.group(1) if match is not None else None
-    if inferred is None or not inferred.isidentifier():
-        return None  # missing / complex dtype (List[...], Struct) — don't guess
-    # Only a genuine mismatch on an *already declared* column (declared_type
-    # present, or the legacy message) — not an undeclared extra column.
-    if data.get("declared_type") is None and "declared type" not in diag.message:
-        return None
+    is identified by the diagnostic's same-file ``declared here`` related entry;
+    the edit prefers polypolarism's ``suggested_annotation`` +
+    ``declared_annotation_range`` (issue #113), falling back to `ast`."""
+    # Only a genuine mismatch on an already-declared, same-file column.
     if not diag.related_information:
         return None
     target = next((r for r in diag.related_information if r.location.uri == uri), None)
     if target is None:
         return None  # declared field is in another file we can't safely edit
-    field = _annassign_at_line(tree, target.location.range.start.line + 1)
-    if field is None or field.annotation is None:
-        return None
-    ann_range = _ast_range(field.annotation)
-    if ann_range is None:
-        return None
-    new_text = f"{alias}.{inferred}"
+
+    data = _diag_data(diag)
+    suggested = data.get("suggested_annotation")
+    declared_range = data.get("declared_annotation_range")
+    if isinstance(suggested, str) and isinstance(declared_range, dict):
+        # polypolarism hands us the exact annotation range + replacement text
+        # (handles complex dtypes like `pl.List(pl.Int64)` that ast guessing
+        # would reject).
+        new_text = suggested
+        edit_range = _to_range(declared_range)
+    else:
+        # Fallback: derive the inferred dtype + annotation sub-range via ast.
+        inferred = data.get("inferred_type")
+        if inferred is None:
+            match = _INFERRED_TYPE_RE.search(diag.message)
+            inferred = match.group(1) if match is not None else None
+        if inferred is None or not inferred.isidentifier():
+            return None  # missing / complex dtype — don't guess
+        if data.get("declared_type") is None and "declared type" not in diag.message:
+            return None
+        field = _annassign_at_line(tree, target.location.range.start.line + 1)
+        if field is None or field.annotation is None:
+            return None
+        edit_range = _ast_range(field.annotation)
+        if edit_range is None:
+            return None
+        new_text = f"{alias}.{inferred}"
+
     return lsp.CodeAction(
         title=f"[{code}] declared type -> {new_text} (match inferred)",
         kind=lsp.CodeActionKind.QuickFix,
         diagnostics=[diag],
         edit=lsp.WorkspaceEdit(
-            changes={uri: [lsp.TextEdit(range=ann_range, new_text=new_text)]}
+            changes={uri: [lsp.TextEdit(range=edit_range, new_text=new_text)]}
         ),
     )
 
@@ -425,28 +453,45 @@ def _retype_declared_fix(
 def _declare_column_fix(
     diag: lsp.Diagnostic, tree: ast.Module, alias: str, uri: str, code: str
 ) -> Optional[lsp.CodeAction]:
-    """QuickFix for an *undeclared* column whose dtype is known (e.g. a strict
-    schema's extra return column, PLY040 "Extra column 'X' of type T"): declare
-    it on the target schema. This is an insertion, not a retype — gated on the
-    column not already being declared, so it never duplicates a field."""
+    """Declare an undeclared column on its target schema — an insertion, never
+    a retype (gated on the column not already being declared). Two shapes:
+
+    - PLY042 with a statically-known dtype: the column, its target ``schema``
+      and a ready-to-insert ``suggested_dtype`` all come from the diagnostic
+      (issue #114).
+    - PLY040 "Extra column 'X' of type T": the column + inferred dtype, with
+      the schema taken from the enclosing function's declared return type.
+
+    The schema class is located in this document, so cross-file schemas (which
+    we cannot edit in place yet) are skipped."""
     data = _diag_data(diag)
     column = data.get("column_name")
-    dtype = data.get("inferred_type")
-    if column is None or dtype is None or data.get("declared_type") is not None:
+    if column is None or not column.isidentifier():
         return None
-    if not column.isidentifier() or not dtype.isidentifier():
+
+    suggested_dtype = data.get("suggested_dtype")
+    if suggested_dtype is not None:
+        # PLY042: core rendered a ready-to-insert pandera annotation string.
+        dtype_text = suggested_dtype
+        schema_name = data.get("schema")
+    elif data.get("declared_type") is None and data.get("inferred_type"):
+        # PLY040 extra return column: declare the inferred dtype.
+        inferred = data["inferred_type"]
+        if not inferred.isidentifier():
+            return None  # complex dtype — don't guess
+        dtype_text = f"{alias}.{inferred}"
+        schema_name = data.get("schema")
+        if schema_name is None:
+            func = _enclosing_function(tree, diag.range.start.line + 1)
+            schema_name = _return_schema(func) if func is not None else None
+    else:
         return None
-    # Target schema: named on the diagnostic (PLY042), else the enclosing
-    # function's declared return schema (extra-return-column case).
-    schema_name = data.get("schema")
-    if schema_name is None:
-        func = _enclosing_function(tree, diag.range.start.line + 1)
-        schema_name = _return_schema(func) if func is not None else None
+
     if schema_name is None:
         return None
     classdef = _class_def(tree, schema_name)
     if classdef is None:
-        return None  # schema declared in another file — needs core `schema_file`
+        return None  # schema declared in another file — not edited in place
     anchor = _last_field(classdef)
     if anchor is None:
         return None  # no field to anchor onto — don't risk a malformed insert
@@ -455,9 +500,9 @@ def _declare_column_fix(
         return None
     indent = " " * anchor.col_offset
     point = lsp.Range(start=anchor_range.end, end=anchor_range.end)
-    new_text = f"\n{indent}{column}: {alias}.{dtype}"
+    new_text = f"\n{indent}{column}: {dtype_text}"
     return lsp.CodeAction(
-        title=f"[{code}] declare column '{column}' as {alias}.{dtype} in {schema_name}",
+        title=f"[{code}] declare column '{column}' as {dtype_text} in {schema_name}",
         kind=lsp.CodeActionKind.QuickFix,
         diagnostics=[diag],
         edit=lsp.WorkspaceEdit(
