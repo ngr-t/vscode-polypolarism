@@ -625,28 +625,44 @@ def _run_rename_query(document: TextDocument, locator: str) -> Optional[str]:
     return proc.stdout
 
 
+def _document_matches_disk(document: TextDocument) -> bool:
+    """True if the live buffer is in sync with the file on disk."""
+    try:
+        with open(document.path, "r", encoding="utf-8") as stream:
+            return stream.read() == document.source
+    except OSError:
+        return False
+
+
 def _rename_targets(document: TextDocument, position: lsp.Position) -> Optional[dict]:
     """Query polypolarism for every provable occurrence of the column under
     `position`. Returns ``{column, schema, targets: [{uri, range}]}`` or None.
 
-    The current buffer is written to a temp file so the query matches what the
-    user sees (not just what is on disk); occurrences in that temp file are
-    mapped back to this document's URI.
+    When the buffer matches disk, the real file is queried so polypolarism's
+    project-wide scan can follow cross-file references. With unsaved edits we
+    query a temp copy of the buffer instead — single-document only, so no edit
+    is ever derived from stale on-disk content. Occurrences in the queried file
+    map back to this document's URI; others keep their own (cross-file).
     """
     if utils.is_stdlib_file(document.path):
         return None
+
+    self_path = os.path.realpath(document.path)
     tmp: Optional[str] = None
     data: Optional[dict] = None
     try:
-        handle, tmp = tempfile.mkstemp(suffix=".py")
-        # polypolarism echoes the resolved path back in `targets`; resolve ours
-        # too so the temp-file occurrences map back to this document (macOS
-        # symlinks the temp dir, e.g. /var -> /private/var).
-        tmp = os.path.realpath(tmp)
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            stream.write(document.source)
+        if _document_matches_disk(document):
+            query_file = self_path
+        else:
+            handle, tmp = tempfile.mkstemp(suffix=".py")
+            # Resolve our temp path too (macOS symlinks /var -> /private/var)
+            # so polypolarism's resolved `file` matches on the way back.
+            tmp = os.path.realpath(tmp)
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                stream.write(document.source)
+            query_file = tmp
         # CLI position: 1-indexed line, 0-indexed column.
-        locator = f"{tmp}:{position.line + 1}:{position.character}"
+        locator = f"{query_file}:{position.line + 1}:{position.character}"
         stdout = _run_rename_query(document, locator)
         if not stdout:
             return None
@@ -663,10 +679,11 @@ def _rename_targets(document: TextDocument, position: lsp.Position) -> Optional[
 
     if not data.get("column") or not data.get("targets"):
         return None
+    this_file = tmp if tmp is not None else self_path
     targets = []
     for entry in data["targets"]:
         entry_file = entry.get("file")
-        if entry_file is None or utils.is_same_path(entry_file, tmp):
+        if entry_file is None or utils.is_same_path(entry_file, this_file):
             uri = document.uri
         else:
             uri = uris.from_fs_path(entry_file)
@@ -692,10 +709,20 @@ def prepare_rename(params: lsp.PrepareRenameParams) -> Optional[lsp.Range]:
     return None
 
 
+_RENAME_HERE = "polypolarism.rename.thisFile"
+_RENAME_OTHER = "polypolarism.rename.otherFiles"
+
+
 @LSP_SERVER.feature(lsp.TEXT_DOCUMENT_RENAME, lsp.RenameOptions(prepare_provider=True))
 def rename(params: lsp.RenameParams) -> Optional[lsp.WorkspaceEdit]:
     """Rename a Polars column across its schema-field declaration and every
-    provable `pl.col("...")` reference."""
+    provable `pl.col("...")` reference.
+
+    Returned as ``documentChanges`` with ``changeAnnotations``: edits in files
+    other than the active one are grouped under a confirmation-required
+    annotation, so the editor's refactor preview makes the multi-file effect
+    explicit and lets the user review before applying.
+    """
     new_name = params.new_name
     document = LSP_SERVER.workspace.text_documents.get(params.text_document.uri)
     if document is None:
@@ -710,12 +737,52 @@ def rename(params: lsp.RenameParams) -> Optional[lsp.WorkspaceEdit]:
     result = _rename_targets(document, params.position)
     if result is None or not result["targets"]:
         return None
-    changes: dict[str, list[lsp.TextEdit]] = {}
+
+    ranges_by_uri: dict[str, list[lsp.Range]] = {}
     for target in result["targets"]:
-        changes.setdefault(target["uri"], []).append(
-            lsp.TextEdit(range=target["range"], new_text=new_name)
+        ranges_by_uri.setdefault(target["uri"], []).append(target["range"])
+
+    doc_uri = document.uri
+    other_files = sum(1 for uri in ranges_by_uri if uri != doc_uri)
+    column = result["column"]
+
+    document_changes = [
+        lsp.TextDocumentEdit(
+            text_document=lsp.OptionalVersionedTextDocumentIdentifier(
+                uri=uri, version=None
+            ),
+            edits=[
+                lsp.AnnotatedTextEdit(
+                    range=rng,
+                    new_text=new_name,
+                    annotation_id=_RENAME_HERE if uri == doc_uri else _RENAME_OTHER,
+                )
+                for rng in ranges
+            ],
         )
-    return lsp.WorkspaceEdit(changes=changes)
+        for uri, ranges in ranges_by_uri.items()
+    ]
+
+    annotations = {
+        _RENAME_HERE: lsp.ChangeAnnotation(
+            label=f"Rename column '{column}' in this file",
+            needs_confirmation=False,
+        )
+    }
+    if other_files:
+        annotations[_RENAME_OTHER] = lsp.ChangeAnnotation(
+            label=f"Rename column '{column}' in {other_files} other file(s)",
+            needs_confirmation=True,
+            description=(
+                "Only references polypolarism can prove are the same "
+                "(schema, column) are rewritten — review before applying."
+            ),
+        )
+    used = {edit.annotation_id for tde in document_changes for edit in tde.edits}
+    annotations = {key: ann for key, ann in annotations.items() if key in used}
+    return lsp.WorkspaceEdit(
+        document_changes=document_changes, change_annotations=annotations
+    )
 
 
 def _linting_helper(document: TextDocument) -> list[lsp.Diagnostic]:

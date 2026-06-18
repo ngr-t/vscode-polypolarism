@@ -20,6 +20,12 @@ TEST_FILE4_PATH = constants.TEST_DATA / "sample4" / "sample.py"
 TEST_FILE4_URI = utils.as_uri(str(TEST_FILE4_PATH))
 TEST_FILE5_PATH = constants.TEST_DATA / "sample5" / "sample.py"
 TEST_FILE5_URI = utils.as_uri(str(TEST_FILE5_PATH))
+XFILE_MAIN_PATH = constants.TEST_DATA / "sample_xfile" / "main.py"
+XFILE_MAIN_URI = utils.as_uri(str(XFILE_MAIN_PATH))
+XFILE_SCHEMA_PATH = constants.TEST_DATA / "sample_xfile" / "schema.py"
+XFILE_SCHEMA_URI = utils.as_uri(str(XFILE_SCHEMA_PATH))
+RENAME_HERE = "polypolarism.rename.thisFile"
+RENAME_OTHER = "polypolarism.rename.otherFiles"
 TIMEOUT = 30  # seconds
 
 
@@ -421,10 +427,17 @@ def test_rename_column():
             }
         )
 
-    edits = workspace_edit["changes"][TEST_FILE4_URI]
+    # Single-document rename: one TextDocumentEdit for this file, annotated as
+    # "this file" (no confirmation needed); no other-file group.
+    document_changes = workspace_edit["documentChanges"]
+    assert_that(len(document_changes), is_(1))
+    tde = document_changes[0]
+    assert_that(tde["textDocument"]["uri"], is_(TEST_FILE4_URI))
+    edits = tde["edits"]
     assert_that(len(edits), is_(3))
     for one in edits:
         assert_that(one["newText"], is_("value"))
+        assert_that(one["annotationId"], is_(RENAME_HERE))
     # The declaration (line 10 -> 9) and both `pl.col("amount")` references
     # (line 15 -> 14), each spanning just the column-name token.
     spans = sorted(
@@ -436,6 +449,65 @@ def test_rename_column():
         for e in edits
     )
     assert_that(spans, is_([(9, 4, 10), (14, 29, 35), (14, 64, 70)]))
+    annotations = workspace_edit["changeAnnotations"]
+    assert_that(RENAME_HERE in annotations, is_(True))
+    assert_that(annotations[RENAME_HERE]["needsConfirmation"], is_(False))
+    assert_that(RENAME_OTHER in annotations, is_(False))
+
+
+def test_rename_column_cross_file():
+    """Cross-file rename (D-11b): renaming a column referenced in one file but
+    declared in another rewrites both; edits in the other file are grouped
+    under a confirmation-required change annotation."""
+    main_contents = XFILE_MAIN_PATH.read_text()
+
+    with session.LspSession() as ls_session:
+        ls_session.initialize(defaults.VSCODE_DEFAULT_INITIALIZE)
+
+        done = Event()
+        ls_session.set_notification_callback(
+            session.PUBLISH_DIAGNOSTICS, lambda _params: done.set()
+        )
+        ls_session.notify_did_open(
+            {
+                "textDocument": {
+                    "uri": XFILE_MAIN_URI,
+                    "languageId": "python",
+                    "version": 1,
+                    "text": main_contents,
+                }
+            }
+        )
+        done.wait(TIMEOUT)
+
+        # Cursor on `pl.col("amount")` in main.py (line 8 -> 7, char 35).
+        workspace_edit = ls_session.text_document_rename(
+            {
+                "textDocument": {"uri": XFILE_MAIN_URI},
+                "position": {"line": 7, "character": 35},
+                "newName": "total",
+            }
+        )
+
+    edits_by_uri = {
+        tde["textDocument"]["uri"]: tde["edits"]
+        for tde in workspace_edit["documentChanges"]
+    }
+    # The active file (reference) and the schema file (declaration).
+    assert_that(set(edits_by_uri), is_({XFILE_MAIN_URI, XFILE_SCHEMA_URI}))
+
+    main_edit = edits_by_uri[XFILE_MAIN_URI][0]
+    assert_that(main_edit["newText"], is_("total"))
+    assert_that(main_edit["annotationId"], is_(RENAME_HERE))
+
+    schema_edit = edits_by_uri[XFILE_SCHEMA_URI][0]
+    assert_that(schema_edit["newText"], is_("total"))
+    # The other-file edit needs confirmation in the refactor preview.
+    assert_that(schema_edit["annotationId"], is_(RENAME_OTHER))
+
+    annotations = workspace_edit["changeAnnotations"]
+    assert_that(annotations[RENAME_HERE]["needsConfirmation"], is_(False))
+    assert_that(annotations[RENAME_OTHER]["needsConfirmation"], is_(True))
 
 
 def test_quickfix_retype_declared():

@@ -24,9 +24,12 @@ Static type checker for Polars DataFrames based on row polymorphism.
   are only offered when the edit can be resolved unambiguously.
 - Rename a column: renaming a schema field (or a `pl.col("...")` reference)
   rewrites the field declaration and every reference polypolarism can
-  prove points at the same `(schema, column)`. Only occurrences with a
-  proven origin are touched, and the new name must be a valid Python
-  identifier (the schema field is renamed too).
+  prove points at the same `(schema, column)`, **across files**. Only
+  occurrences with a proven origin are touched, and the new name must be a
+  valid Python identifier (the schema field is renamed too). Edits in
+  files other than the one you triggered the rename in are grouped for
+  confirmation in the refactor preview, so the multi-file effect is
+  explicit before you apply it.
 - Checks on file open and save
 
 ## Requirements

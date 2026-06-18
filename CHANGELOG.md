@@ -49,11 +49,17 @@ Catch-up sync with polypolarism main:
   renames a Polars column across its schema-field declaration and every
   `pl.col("...")` reference that polypolarism proves refers to the same
   `(schema, column)`, via the `--rename-targets FILE:LINE:COL` query mode.
-  Only proven occurrences are rewritten; the rename runs against the live
-  editor buffer (so unsaved edits are honored) and rejects new names that
-  are not valid Python identifiers (the schema field is renamed too).
-  Scope is currently single-document; cross-file references are not yet
-  followed.
+  Only proven occurrences are rewritten, and new names that are not valid
+  Python identifiers are rejected (the schema field is renamed too).
+  - **Cross-file**: references in other files are followed. The edit is
+    returned as `documentChanges` with `changeAnnotations`; edits outside
+    the active file are grouped under a confirmation-required annotation,
+    so the editor's refactor preview makes the multi-file effect explicit
+    and the user reviews before applying.
+  - When the active buffer matches disk, the real file is queried so the
+    project-wide scan can resolve cross-file references; with unsaved
+    edits the query falls back to the live buffer (single-document only),
+    so no edit is ever derived from stale on-disk content.
 - Multi-file JSON output: the per-diagnostic `file` field is respected,
   so diagnostics are never attributed to the wrong document.
 - Parse/read failures (now emitted by the CLI as failing CheckResults,
