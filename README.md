@@ -21,10 +21,12 @@ Static type checker for Polars DataFrames based on row polymorphism.
   diagnostics — make an over-constrained parameter a bare `pl.DataFrame`
   (`PLY042`), align a declared schema field with the inferred dtype, or
   declare an undeclared extra column on a strict schema (`PLY040`). Fixes
-  are only offered when the edit can be resolved unambiguously. Symbol
-  rename (`textDocument/rename`) is not provided yet — column names are
-  runtime strings that need scope tracking the checker does not expose,
-  and Pylance already renames Python symbols.
+  are only offered when the edit can be resolved unambiguously.
+- Rename a column: renaming a schema field (or a `pl.col("...")` reference)
+  rewrites the field declaration and every reference polypolarism can
+  prove points at the same `(schema, column)`. Only occurrences with a
+  proven origin are touched, and the new name must be a valid Python
+  identifier (the schema field is renamed too).
 - Checks on file open and save
 
 ## Requirements

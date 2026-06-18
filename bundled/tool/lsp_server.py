@@ -7,10 +7,13 @@ from __future__ import annotations
 import ast
 import copy
 import json
+import keyword
 import os
 import pathlib
 import re
+import subprocess
 import sys
+import tempfile
 import traceback
 from typing import Any, Optional, Sequence
 
@@ -523,6 +526,153 @@ def code_action(params: lsp.CodeActionParams) -> Optional[list[lsp.CodeAction]]:
     return actions or None
 
 
+# **********************************************************
+# Rename feature — D-11b
+# **********************************************************
+# Column rename is driven by polypolarism's `--rename-targets FILE:LINE:COL`
+# query mode: given a position on a column-name token it returns every source
+# occurrence that PROVABLY refers to the same `(schema, field)` column — the
+# schema-field declaration plus `pl.col("...")`-style string references. We
+# query against the current editor buffer (written to a temp file) so unsaved
+# edits are honored, then turn the returned ranges into a WorkspaceEdit.
+
+
+def _range_contains(rng: lsp.Range, pos: lsp.Position) -> bool:
+    """True if `pos` lies within `rng` (inclusive)."""
+    return _pos_le(rng.start, pos) and _pos_le(pos, rng.end)
+
+
+def _run_rename_query(document: TextDocument, locator: str) -> Optional[str]:
+    """Run polypolarism's `--rename-targets` query as a subprocess and return
+    its stdout. A subprocess (rather than the in-process module runner used for
+    linting) is required: the query mode's output is not reliably captured when
+    run in-process under the language server.
+    """
+    settings = copy.deepcopy(_get_settings_by_document(document))
+    args = ["--rename-targets", locator] + list(settings["args"])
+    if settings["path"]:
+        argv = list(settings["path"]) + args
+    else:
+        interpreter = (settings["interpreter"] or [sys.executable])[0]
+        argv = [interpreter, "-m", TOOL_MODULE] + args
+    env = os.environ.copy()
+    if settings.get("importStrategy", "useBundled") != "fromEnvironment":
+        # Make the bundled copy importable to the subprocess (mirrors how the
+        # server puts bundled/libs on its own sys.path under useBundled).
+        bundled_libs = os.fspath(pathlib.Path(__file__).parent.parent / "libs")
+        env["PYTHONPATH"] = bundled_libs + os.pathsep + env.get("PYTHONPATH", "")
+    log_to_output(" ".join(argv))
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            cwd=settings["cwd"],
+            env=env,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log_error(f"rename query subprocess failed: {exc}")
+        return None
+    if proc.stderr:
+        log_to_output(proc.stderr)
+    return proc.stdout
+
+
+def _rename_targets(document: TextDocument, position: lsp.Position) -> Optional[dict]:
+    """Query polypolarism for every provable occurrence of the column under
+    `position`. Returns ``{column, schema, targets: [{uri, range}]}`` or None.
+
+    The current buffer is written to a temp file so the query matches what the
+    user sees (not just what is on disk); occurrences in that temp file are
+    mapped back to this document's URI.
+    """
+    if utils.is_stdlib_file(document.path):
+        return None
+    tmp: Optional[str] = None
+    data: Optional[dict] = None
+    try:
+        handle, tmp = tempfile.mkstemp(suffix=".py")
+        # polypolarism echoes the resolved path back in `targets`; resolve ours
+        # too so the temp-file occurrences map back to this document (macOS
+        # symlinks the temp dir, e.g. /var -> /private/var).
+        tmp = os.path.realpath(tmp)
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(document.source)
+        # CLI position: 1-indexed line, 0-indexed column.
+        locator = f"{tmp}:{position.line + 1}:{position.character}"
+        stdout = _run_rename_query(document, locator)
+        if not stdout:
+            return None
+        data = json.loads(stdout)
+    except (json.JSONDecodeError, OSError) as exc:
+        log_error(f"rename query failed: {exc}")
+        return None
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    if not data.get("column") or not data.get("targets"):
+        return None
+    targets = []
+    for entry in data["targets"]:
+        entry_file = entry.get("file")
+        if entry_file is None or utils.is_same_path(entry_file, tmp):
+            uri = document.uri
+        else:
+            uri = uris.from_fs_path(entry_file)
+        targets.append({"uri": uri, "range": _to_range(entry)})
+    return {"column": data["column"], "schema": data.get("schema"), "targets": targets}
+
+
+@LSP_SERVER.feature(lsp.TEXT_DOCUMENT_PREPARE_RENAME)
+def prepare_rename(params: lsp.PrepareRenameParams) -> Optional[lsp.Range]:
+    """Allow rename only when the cursor is on a resolvable column token;
+    return that token's range so the editor seeds the rename box correctly."""
+    document = LSP_SERVER.workspace.text_documents.get(params.text_document.uri)
+    if document is None:
+        return None
+    result = _rename_targets(document, params.position)
+    if result is None:
+        return None
+    for target in result["targets"]:
+        if target["uri"] == document.uri and _range_contains(
+            target["range"], params.position
+        ):
+            return target["range"]
+    return None
+
+
+@LSP_SERVER.feature(lsp.TEXT_DOCUMENT_RENAME, lsp.RenameOptions(prepare_provider=True))
+def rename(params: lsp.RenameParams) -> Optional[lsp.WorkspaceEdit]:
+    """Rename a Polars column across its schema-field declaration and every
+    provable `pl.col("...")` reference."""
+    new_name = params.new_name
+    document = LSP_SERVER.workspace.text_documents.get(params.text_document.uri)
+    if document is None:
+        return None
+    # The schema-field declaration is renamed too, so the new name must be a
+    # valid Python identifier; reject otherwise rather than break the schema.
+    if not new_name.isidentifier() or keyword.iskeyword(new_name):
+        raise ValueError(
+            f"Cannot rename column to {new_name!r}: a schema field must be a "
+            "valid, non-keyword Python identifier."
+        )
+    result = _rename_targets(document, params.position)
+    if result is None or not result["targets"]:
+        return None
+    changes: dict[str, list[lsp.TextEdit]] = {}
+    for target in result["targets"]:
+        changes.setdefault(target["uri"], []).append(
+            lsp.TextEdit(range=target["range"], new_text=new_name)
+        )
+    return lsp.WorkspaceEdit(changes=changes)
+
+
 def _linting_helper(document: TextDocument) -> list[lsp.Diagnostic]:
     """Run polypolarism and parse JSON output."""
     result = _run_tool_on_document(document)
@@ -804,10 +954,20 @@ def _run_tool_on_document(
     document: TextDocument,
     use_stdin: bool = False,
     extra_args: Optional[Sequence[str]] = None,
+    tool_args: Optional[Sequence[str]] = None,
+    append_target: bool = True,
 ) -> utils.RunResult | None:
-    """Runs polypolarism on the given document."""
+    """Runs polypolarism on the given document.
+
+    ``tool_args`` defaults to the linting args (``--format json``); pass a
+    different set (e.g. ``--rename-targets FILE:LINE:COL``) to drive another
+    CLI mode. ``append_target=False`` omits the trailing document path for
+    modes whose target is carried inline.
+    """
     if extra_args is None:
         extra_args = []
+    if tool_args is None:
+        tool_args = TOOL_ARGS
     if str(document.uri).startswith("vscode-notebook-cell"):
         # Skip notebook cells
         return None
@@ -840,8 +1000,9 @@ def _run_tool_on_document(
         # process then run as module.
         argv = [TOOL_MODULE]
 
-    argv += TOOL_ARGS + settings["args"] + extra_args
-    argv += [document.path]
+    argv += list(tool_args) + settings["args"] + list(extra_args)
+    if append_target:
+        argv += [document.path]
 
     if use_path:
         # This mode is used when running executables.

@@ -40,7 +40,15 @@ Catch-up sync with polypolarism main:
   ranges are exact; when an edit cannot be resolved unambiguously (no
   polars import, cross-file schema, undeclared column with unknown dtype,
   complex dtype) no action is offered rather than risking a wrong edit.
-  `textDocument/rename` is intentionally not provided yet (see README).
+- **Column rename** (D-11b): `textDocument/rename` (with `prepareRename`)
+  renames a Polars column across its schema-field declaration and every
+  `pl.col("...")` reference that polypolarism proves refers to the same
+  `(schema, column)`, via the `--rename-targets FILE:LINE:COL` query mode.
+  Only proven occurrences are rewritten; the rename runs against the live
+  editor buffer (so unsaved edits are honored) and rejects new names that
+  are not valid Python identifiers (the schema field is renamed too).
+  Scope is currently single-document; cross-file references are not yet
+  followed.
 - Multi-file JSON output: the per-diagnostic `file` field is respected,
   so diagnostics are never attributed to the wrong document.
 - Parse/read failures (now emitted by the CLI as failing CheckResults,

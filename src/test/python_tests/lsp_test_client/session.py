@@ -156,6 +156,18 @@ class LspSession(MethodDispatcher):
         fut = self._send_request("textDocument/hover", params=hover_params)
         return fut.result()
 
+    def text_document_prepare_rename(self, prepare_rename_params):
+        """Sends text document prepareRename request to LSP server."""
+        fut = self._send_request(
+            "textDocument/prepareRename", params=prepare_rename_params
+        )
+        return fut.result()
+
+    def text_document_rename(self, rename_params):
+        """Sends text document rename request to LSP server."""
+        fut = self._send_request("textDocument/rename", params=rename_params)
+        return fut.result()
+
     def code_action_resolve(self, code_action_resolve_params):
         """Sends text document code actions resolve request to LSP server."""
         fut = self._send_request(

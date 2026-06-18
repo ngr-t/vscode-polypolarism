@@ -16,6 +16,8 @@ TEST_FILE2_PATH = constants.TEST_DATA / "sample2" / "sample.py"
 TEST_FILE2_URI = utils.as_uri(str(TEST_FILE2_PATH))
 TEST_FILE3_PATH = constants.TEST_DATA / "sample3" / "sample.py"
 TEST_FILE3_URI = utils.as_uri(str(TEST_FILE3_PATH))
+TEST_FILE4_PATH = constants.TEST_DATA / "sample4" / "sample.py"
+TEST_FILE4_URI = utils.as_uri(str(TEST_FILE4_PATH))
 TIMEOUT = 30  # seconds
 
 ERROR_CODES_HREF = "https://github.com/ngr-t/polypolarism#diagnostic-codes"
@@ -340,3 +342,69 @@ def test_quickfix_declare_column():
     assert_that(edit["newText"], is_("\n    extra: pl.Float64"))
     assert_that(edit["range"]["start"], is_(edit["range"]["end"]))
     assert_that(edit["range"]["start"]["line"], is_(15))
+
+
+def test_rename_column():
+    """textDocument/rename (D-11b): renaming a column rewrites its schema-field
+    declaration and every provable `pl.col("...")` reference; prepareRename
+    gates the cursor onto a resolvable column token."""
+    contents = TEST_FILE4_PATH.read_text()
+
+    with session.LspSession() as ls_session:
+        ls_session.initialize(defaults.VSCODE_DEFAULT_INITIALIZE)
+
+        done = Event()
+        ls_session.set_notification_callback(
+            session.PUBLISH_DIAGNOSTICS, lambda _params: done.set()
+        )
+        ls_session.notify_did_open(
+            {
+                "textDocument": {
+                    "uri": TEST_FILE4_URI,
+                    "languageId": "python",
+                    "version": 1,
+                    "text": contents,
+                }
+            }
+        )
+        done.wait(TIMEOUT)
+
+        # Cursor on the `amount` field declaration (line 10, 1-indexed -> 9).
+        position = {"line": 9, "character": 4}
+
+        prepared = ls_session.text_document_prepare_rename(
+            {"textDocument": {"uri": TEST_FILE4_URI}, "position": position}
+        )
+        assert_that(
+            prepared,
+            is_(
+                {
+                    "start": {"line": 9, "character": 4},
+                    "end": {"line": 9, "character": 10},
+                }
+            ),
+        )
+
+        workspace_edit = ls_session.text_document_rename(
+            {
+                "textDocument": {"uri": TEST_FILE4_URI},
+                "position": position,
+                "newName": "value",
+            }
+        )
+
+    edits = workspace_edit["changes"][TEST_FILE4_URI]
+    assert_that(len(edits), is_(3))
+    for one in edits:
+        assert_that(one["newText"], is_("value"))
+    # The declaration (line 10 -> 9) and both `pl.col("amount")` references
+    # (line 15 -> 14), each spanning just the column-name token.
+    spans = sorted(
+        (
+            e["range"]["start"]["line"],
+            e["range"]["start"]["character"],
+            e["range"]["end"]["character"],
+        )
+        for e in edits
+    )
+    assert_that(spans, is_([(9, 4, 10), (14, 29, 35), (14, 64, 70)]))
