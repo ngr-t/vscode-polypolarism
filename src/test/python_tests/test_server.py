@@ -510,6 +510,52 @@ def test_rename_column_cross_file():
     assert_that(annotations[RENAME_OTHER]["needsConfirmation"], is_(True))
 
 
+def test_rename_cross_file_refuses_drifted_buffer():
+    """Cross-file rename refuses when another involved file is open with unsaved
+    edits that moved the column — the disk-based scan would be stale, so we
+    abort rather than corrupt the file."""
+    main_contents = XFILE_MAIN_PATH.read_text()
+    # Open schema.py with a drifted buffer: two blank lines prepended, so the
+    # `amount` declaration no longer sits where it is on disk.
+    drifted_schema = "\n\n" + XFILE_SCHEMA_PATH.read_text()
+
+    def _open(ls_session, uri, text):
+        opened = Event()
+        ls_session.set_notification_callback(
+            session.PUBLISH_DIAGNOSTICS, lambda _params: opened.set()
+        )
+        ls_session.notify_did_open(
+            {
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": "python",
+                    "version": 1,
+                    "text": text,
+                }
+            }
+        )
+        opened.wait(TIMEOUT)
+
+    with session.LspSession() as ls_session:
+        ls_session.initialize(defaults.VSCODE_DEFAULT_INITIALIZE)
+        _open(ls_session, XFILE_SCHEMA_URI, drifted_schema)
+        _open(ls_session, XFILE_MAIN_URI, main_contents)
+
+        raised = False
+        try:
+            ls_session.text_document_rename(
+                {
+                    "textDocument": {"uri": XFILE_MAIN_URI},
+                    "position": {"line": 7, "character": 35},
+                    "newName": "total",
+                }
+            )
+        except Exception:  # noqa: BLE001 - server returns a JSON-RPC error
+            raised = True
+
+    assert_that(raised, is_(True))
+
+
 def test_quickfix_retype_declared():
     """QuickFix (D-11b): a PLY040 type mismatch offers a "retype the declared
     field" action sourced from polypolarism's `suggested_annotation` and

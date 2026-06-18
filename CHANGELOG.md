@@ -60,6 +60,11 @@ Catch-up sync with polypolarism main:
     project-wide scan can resolve cross-file references; with unsaved
     edits the query falls back to the live buffer (single-document only),
     so no edit is ever derived from stale on-disk content.
+  - If another involved file is open with unsaved edits that moved the
+    column (so the disk-based scan would be stale for it), the rename is
+    refused with a message to save that file first, rather than applying
+    a stale edit. Files that are not open take the edit on disk exactly
+    as scanned.
 - Multi-file JSON output: the per-diagnostic `file` field is respected,
   so diagnostics are never attributed to the wrong document.
 - Parse/read failures (now emitted by the CLI as failing CheckResults,

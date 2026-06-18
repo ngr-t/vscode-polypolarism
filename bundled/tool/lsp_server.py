@@ -713,6 +713,33 @@ _RENAME_HERE = "polypolarism.rename.thisFile"
 _RENAME_OTHER = "polypolarism.rename.otherFiles"
 
 
+def _drifted_files(targets: list, column: str, active_uri: str) -> list[str]:
+    """URIs of open documents (other than the active one) whose live buffer no
+    longer has `column` at a target range — i.e. the disk-based cross-file scan
+    is stale for them, so applying the edit could corrupt the file.
+
+    The active document is always queried against its own buffer, so it is
+    never stale. Files that are not open take the edit on disk (exactly what was
+    scanned), so they are trusted; only open buffers that drifted are flagged.
+    """
+    drifted: list[str] = []
+    for target in targets:
+        uri = target["uri"]
+        if uri == active_uri or uri in drifted:
+            continue
+        other = LSP_SERVER.workspace.text_documents.get(uri)
+        if other is None:
+            continue  # not open: the edit lands on disk == what was scanned
+        lines = other.source.splitlines()
+        rng = target["range"]
+        token = None
+        if rng.start.line == rng.end.line and rng.start.line < len(lines):
+            token = lines[rng.start.line][rng.start.character : rng.end.character]
+        if token != column:
+            drifted.append(uri)
+    return drifted
+
+
 @LSP_SERVER.feature(lsp.TEXT_DOCUMENT_RENAME, lsp.RenameOptions(prepare_provider=True))
 def rename(params: lsp.RenameParams) -> Optional[lsp.WorkspaceEdit]:
     """Rename a Polars column across its schema-field declaration and every
@@ -738,13 +765,26 @@ def rename(params: lsp.RenameParams) -> Optional[lsp.WorkspaceEdit]:
     if result is None or not result["targets"]:
         return None
 
+    column = result["column"]
+    # Cross-file occurrences are located against each file ON DISK. If another
+    # involved file is open with unsaved edits that moved the column, applying
+    # the disk-based range would corrupt it — refuse and ask the user to save.
+    drifted = _drifted_files(result["targets"], column, document.uri)
+    if drifted:
+        names = ", ".join(
+            sorted(os.path.basename(uris.to_fs_path(uri)) for uri in drifted)
+        )
+        raise ValueError(
+            f"Cannot rename '{column}' across files with unsaved changes — "
+            f"save {names} and try again."
+        )
+
     ranges_by_uri: dict[str, list[lsp.Range]] = {}
     for target in result["targets"]:
         ranges_by_uri.setdefault(target["uri"], []).append(target["range"])
 
     doc_uri = document.uri
     other_files = sum(1 for uri in ranges_by_uri if uri != doc_uri)
-    column = result["column"]
 
     document_changes = [
         lsp.TextDocumentEdit(
