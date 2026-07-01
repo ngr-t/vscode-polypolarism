@@ -61,7 +61,10 @@
         "lint": "eslint src --ext ts",
         "format-check": "prettier --check 'src/**/*.ts' 'build/**/*.yml' '.github/**/*.yml'",
         "test": "node ./out/test/runTest.js",
-        "vsce-package": "vsce package -o polypolarism.vsix"
+        "vsce-package": "vsce package -o polypolarism.vsix",
+        "demo:capture": "node capture/run.js",
+        "demo:gif": "bash capture/make-gif.sh",
+        "demo": "npm run demo:capture && npm run demo:gif"
     },
     "contributes": {
         "configuration": {
