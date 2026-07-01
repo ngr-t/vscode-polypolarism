@@ -1,4 +1,4 @@
-"""Sample for the PLY042 "declare the column" QuickFix: `flag` is undeclared on
+"""Sample for the pple-undeclared-column "declare the column" QuickFix: `flag` is undeclared on
 `Src`, but `.cast(pl.Boolean)` pins its dtype statically, so polypolarism emits
 `fix.suggested_dtype` and the editor can declare `flag: pl.Boolean`."""
 

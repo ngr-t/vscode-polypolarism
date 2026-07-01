@@ -54,9 +54,13 @@ def _code_actions(ls_session, uri, contents, request_range):
         }
     )
 
-ERROR_CODES_HREF = "https://github.com/ngr-t/polypolarism#diagnostic-codes"
+ERROR_CODES_HREF = (
+    "https://github.com/ngr-t/polypolarism/blob/main/docs/diagnostics.md"
+    "#diagnostic-codes"
+)
 WARNING_CODES_HREF = (
-    "https://github.com/ngr-t/polypolarism#apply-style-helpers-and-warning-codes"
+    "https://github.com/ngr-t/polypolarism/blob/main/docs/diagnostics.md"
+    "#apply-style-helpers-and-warning-codes"
 )
 
 
@@ -91,7 +95,7 @@ def test_linting_example():
         # wait for some time to receive all notifications
         done.wait(TIMEOUT)
 
-        # `[PLY###]` / `[PLW###]` message prefixes are extracted into the
+        # `[pple-<slug>]` / `[pplw-<slug>]` message prefixes are extracted into the
         # diagnostic `code`; `severity` routes errors vs warnings; the
         # function-spanning range `--format json` reports is narrowed onto
         # the `def` name token so the squiggle marks the definition, not the
@@ -113,7 +117,7 @@ def test_linting_example():
                         "for row-polymorphic helpers"
                     ),
                     "severity": 1,
-                    "code": "PLY042",
+                    "code": "pple-undeclared-column",
                     "codeDescription": {"href": ERROR_CODES_HREF},
                     "source": "polypolarism",
                     "data": {"column_name": "amount", "schema": "InputSchema"},
@@ -130,7 +134,7 @@ def test_linting_example():
                         "(`Schema.validate(...)`) to keep checking precise."
                     ),
                     "severity": 2,
-                    "code": "PLW007",
+                    "code": "pplw-unmodeled-method",
                     "codeDescription": {"href": WARNING_CODES_HREF},
                     "source": "polypolarism",
                 },
@@ -195,7 +199,7 @@ def test_schema_hover():
 
 
 def test_typed_mismatch_related_information():
-    """A typed return-column mismatch (PLY040) is reported with a precise
+    """A typed return-column mismatch (pple-return-type) is reported with a precise
     inferred-side span and a `declared here` related location, sourced from
     polypolarism's per-column spans and `related` JSON (issue #110)."""
     contents = TEST_FILE2_PATH.read_text()
@@ -227,7 +231,7 @@ def test_typed_mismatch_related_information():
     diagnostics = actual["diagnostics"]
     assert_that(len(diagnostics), is_(1))
     diagnostic = diagnostics[0]
-    assert_that(diagnostic["code"], is_("PLY040"))
+    assert_that(diagnostic["code"], is_("pple-return-type"))
     assert_that(diagnostic["severity"], is_(1))  # Error
 
     # Precise inferred-side span: the `pl.col("value").sum()` expression on the
@@ -260,8 +264,8 @@ def test_typed_mismatch_related_information():
 
 
 def test_quickfix_bare_param():
-    """QuickFix (D-11b): a PLY042 "column not declared in schema" diagnostic
-    offers a code action that rewrites the offending `DataFrame[Schema]`
+    """QuickFix (D-11b): a pple-undeclared-column "column not declared in schema"
+    diagnostic offers a code action that rewrites the offending `DataFrame[Schema]`
     parameter annotation to a bare `pl.DataFrame` (row-polymorphic helper)."""
     contents = TEST_FILE_PATH.read_text()
 
@@ -284,8 +288,8 @@ def test_quickfix_bare_param():
         )
         done.wait(TIMEOUT)
 
-        # PLY042 is reported on the `process` def line (line 19, 1-indexed ->
-        # 18). Request quick fixes over that line.
+        # pple-undeclared-column is reported on the `process` def line (line 19,
+        # 1-indexed -> 18). Request quick fixes over that line.
         actions = ls_session.text_document_code_action(
             {
                 "textDocument": {"uri": TEST_FILE_URI},
@@ -301,7 +305,7 @@ def test_quickfix_bare_param():
     bare = [
         a
         for a in actions
-        if a.get("kind") == "quickfix" and "PLY042" in a.get("title", "")
+        if a.get("kind") == "quickfix" and "pple-undeclared-column" in a.get("title", "")
     ]
     assert_that(len(bare), is_(1))
     action = bare[0]
@@ -321,7 +325,7 @@ def test_quickfix_bare_param():
 
 
 def test_quickfix_declare_column():
-    """QuickFix (D-11b): an undeclared extra return column (PLY040 "Extra
+    """QuickFix (D-11b): an undeclared extra return column (pple-return-type "Extra
     column 'X' of type T") offers a code action that declares the column on
     the strict return schema — an insertion at the end of the schema body."""
     contents = TEST_FILE3_PATH.read_text()
@@ -345,7 +349,7 @@ def test_quickfix_declare_column():
         )
         done.wait(TIMEOUT)
 
-        # PLY040 "Extra column" points at the return expression (line 23,
+        # pple-return-type "Extra column" points at the return expression (line 23,
         # 1-indexed -> 22). Request quick fixes over that line.
         actions = ls_session.text_document_code_action(
             {
@@ -557,14 +561,14 @@ def test_rename_cross_file_refuses_drifted_buffer():
 
 
 def test_quickfix_retype_declared():
-    """QuickFix (D-11b): a PLY040 type mismatch offers a "retype the declared
+    """QuickFix (D-11b): a pple-return-type type mismatch offers a "retype the declared
     field" action sourced from polypolarism's `suggested_annotation` and
     `declared_annotation_range` (issue #113), editing only the annotation."""
     contents = TEST_FILE2_PATH.read_text()
 
     with session.LspSession() as ls_session:
         ls_session.initialize(defaults.VSCODE_DEFAULT_INITIALIZE)
-        # PLY040 is reported on the return expression (line 20, 1-indexed -> 19).
+        # pple-return-type is reported on the return expression (line 20, 1-indexed -> 19).
         actions = _code_actions(
             ls_session,
             TEST_FILE2_URI,
@@ -597,8 +601,8 @@ def test_quickfix_retype_declared():
     assert_that(replaced, is_("int"))
 
 
-def test_quickfix_declare_column_ply042():
-    """QuickFix (D-11b): a PLY042 whose undeclared column has a statically known
+def test_quickfix_declare_column_undeclared():
+    """QuickFix (D-11b): a pple-undeclared-column whose undeclared column has a statically known
     dtype (here pinned by `.cast(pl.Boolean)`) offers a "declare the column"
     action that inserts the field, using polypolarism's `fix.suggested_dtype`
     (issue #114)."""
@@ -606,7 +610,7 @@ def test_quickfix_declare_column_ply042():
 
     with session.LspSession() as ls_session:
         ls_session.initialize(defaults.VSCODE_DEFAULT_INITIALIZE)
-        # PLY042 is reported on the `f` def line (line 14, 1-indexed -> 13).
+        # pple-undeclared-column is reported on the `f` def line (line 14, 1-indexed -> 13).
         actions = _code_actions(
             ls_session,
             TEST_FILE5_URI,

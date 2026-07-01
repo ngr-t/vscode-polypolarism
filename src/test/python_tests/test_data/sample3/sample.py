@@ -1,4 +1,4 @@
-"""Sample exercising an undeclared extra return column (PLY040 "Extra column"):
+"""Sample exercising an undeclared extra return column (pple-return-type "Extra column"):
 the function produces `extra` but the strict output schema does not declare it,
 so polypolarism reports the inferred-side column plus its dtype. The QuickFix
 declares the column on the strict schema."""

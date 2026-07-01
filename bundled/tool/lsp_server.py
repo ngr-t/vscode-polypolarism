@@ -65,9 +65,11 @@ TOOL_DISPLAY = "Polypolarism"
 # Use JSON output format for easy parsing
 TOOL_ARGS = ["--format", "json"]
 
-# polypolarism tags each diagnostic message with a stable `[PLY###]` (error)
-# or `[PLW###]` (warning) prefix. Extract it into the LSP `code` field.
-DIAGNOSTIC_CODE_RE = re.compile(r"^\[(PL[YW]\d{3})\]\s*")
+# polypolarism tags each diagnostic message with a stable `[pple-<slug>]`
+# (error) or `[pplw-<slug>]` (warning) prefix. Extract it into the LSP `code`
+# field. (Upstream migrated from numeric `PLY###`/`PLW###` codes to semantic
+# slugs; the shape mirrors core's strict `ppl[ew]-[a-z-]+`.)
+DIAGNOSTIC_CODE_RE = re.compile(r"^\[(ppl[ew]-[a-z-]+)\]\s*")
 
 # polypolarism anchors function-level diagnostics to the whole function span
 # (the `def` line through the function's last line). Underlining every line is
@@ -75,10 +77,16 @@ DIAGNOSTIC_CODE_RE = re.compile(r"^\[(PL[YW]\d{3})\]\s*")
 # range onto the function-name token. Group 1 is the function name.
 DEF_NAME_RE = re.compile(r"^\s*(?:async\s+)?def\s+(\w+)")
 
-# README anchors for the diagnostic-code tables (PLY### / PLW###).
-ERROR_CODES_HREF = "https://github.com/ngr-t/polypolarism#diagnostic-codes"
+# Anchors for the diagnostic-code tables. Upstream moved these out of the
+# README into docs/diagnostics.md (errors -> #diagnostic-codes, warnings ->
+# #apply-style-helpers-and-warning-codes).
+ERROR_CODES_HREF = (
+    "https://github.com/ngr-t/polypolarism/blob/main/docs/diagnostics.md"
+    "#diagnostic-codes"
+)
 WARNING_CODES_HREF = (
-    "https://github.com/ngr-t/polypolarism#apply-style-helpers-and-warning-codes"
+    "https://github.com/ngr-t/polypolarism/blob/main/docs/diagnostics.md"
+    "#apply-style-helpers-and-warning-codes"
 )
 
 
@@ -212,8 +220,8 @@ _STRUCTURED_KEYS = (
     "schema",
     "declared_type",
     "inferred_type",
-    # PLY040 retype fix metadata (issue #113): a ready-to-insert pandera
-    # annotation string + the exact range of the declared annotation.
+    # pple-return-type retype fix metadata (issue #113): a ready-to-insert
+    # pandera annotation string + the exact range of the declared annotation.
     "suggested_annotation",
     "declared_annotation_range",
 )
@@ -228,8 +236,8 @@ def _structured_data(diag_data: dict) -> Optional[dict]:
     data = {key: diag_data[key] for key in _STRUCTURED_KEYS if key in diag_data}
     fix = diag_data.get("fix")
     if isinstance(fix, dict) and "suggested_dtype" in fix:
-        # The one fix-object field needed to complete a PLY042 "declare the
-        # column" edit (issue #114); present only when the dtype is static.
+        # The one fix-object field needed to complete a pple-undeclared-column
+        # "declare the column" edit (issue #114); present only when the dtype is static.
         data["suggested_dtype"] = fix["suggested_dtype"]
     return data or None
 
@@ -363,7 +371,7 @@ def _last_field(classdef: ast.ClassDef) -> Optional[ast.AnnAssign]:
 def _bare_param_fix(
     diag: lsp.Diagnostic, tree: ast.Module, alias: str, uri: str, code: str
 ) -> Optional[lsp.CodeAction]:
-    """QuickFix for "column not declared in schema 'S'" (PLY042): drop the
+    """QuickFix for "column not declared in schema 'S'" (pple-undeclared-column): drop the
     schema from the offending parameter, making it a bare ``pl.DataFrame``
     (a row-polymorphic helper that admits any extra columns)."""
     if "not declared" not in diag.message:
@@ -401,7 +409,7 @@ def _bare_param_fix(
 def _retype_declared_fix(
     diag: lsp.Diagnostic, tree: ast.Module, alias: str, uri: str, code: str
 ) -> Optional[lsp.CodeAction]:
-    """QuickFix for a typed return-column mismatch (PLY040, ``TypeDifference``):
+    """QuickFix for a typed return-column mismatch (pple-return-type, ``TypeDifference``):
     rewrite the already-declared schema field to the inferred dtype. The field
     is identified by the diagnostic's same-file ``declared here`` related entry;
     the edit prefers polypolarism's ``suggested_annotation`` +
@@ -456,11 +464,11 @@ def _declare_column_fix(
     """Declare an undeclared column on its target schema — an insertion, never
     a retype (gated on the column not already being declared). Two shapes:
 
-    - PLY042 with a statically-known dtype: the column, its target ``schema``
-      and a ready-to-insert ``suggested_dtype`` all come from the diagnostic
-      (issue #114).
-    - PLY040 "Extra column 'X' of type T": the column + inferred dtype, with
-      the schema taken from the enclosing function's declared return type.
+    - pple-undeclared-column with a statically-known dtype: the column, its
+      target ``schema`` and a ready-to-insert ``suggested_dtype`` all come from
+      the diagnostic (issue #114).
+    - pple-return-type "Extra column 'X' of type T": the column + inferred dtype,
+      with the schema taken from the enclosing function's declared return type.
 
     The schema class is located in this document, so cross-file schemas (which
     we cannot edit in place yet) are skipped."""
@@ -471,11 +479,11 @@ def _declare_column_fix(
 
     suggested_dtype = data.get("suggested_dtype")
     if suggested_dtype is not None:
-        # PLY042: core rendered a ready-to-insert pandera annotation string.
+        # pple-undeclared-column: core rendered a ready-to-insert pandera annotation string.
         dtype_text = suggested_dtype
         schema_name = data.get("schema")
     elif data.get("declared_type") is None and data.get("inferred_type"):
-        # PLY040 extra return column: declare the inferred dtype.
+        # pple-return-type extra return column: declare the inferred dtype.
         inferred = data["inferred_type"]
         if not inferred.isidentifier():
             return None  # complex dtype — don't guess
@@ -839,7 +847,7 @@ def _linting_helper(document: TextDocument) -> list[lsp.Diagnostic]:
 
 
 def _split_code(message: str) -> tuple[Optional[str], str]:
-    """Split the `[PLY###]` / `[PLW###]` prefix off a diagnostic message.
+    """Split the `[pple-<slug>]` / `[pplw-<slug>]` prefix off a diagnostic message.
 
     Returns ``(code, message)``; ``code`` is ``None`` for untagged
     diagnostics (e.g. parse / read failures reported as SyntaxError).
@@ -851,10 +859,10 @@ def _split_code(message: str) -> tuple[Optional[str], str]:
 
 
 def _code_description(code: Optional[str]) -> Optional[lsp.CodeDescription]:
-    """Link a diagnostic code to its table in the polypolarism README."""
+    """Link a diagnostic code to its table in the polypolarism docs."""
     if code is None:
         return None
-    if code.startswith("PLW"):
+    if code.startswith("pplw"):
         return lsp.CodeDescription(href=WARNING_CODES_HREF)
     return lsp.CodeDescription(href=ERROR_CODES_HREF)
 

@@ -1,4 +1,4 @@
-"""Sample exercising one polypolarism error (PLY042) and one warning (PLW007)."""
+"""Sample exercising one polypolarism error (pple-undeclared-column) and one warning (pplw-unmodeled-method)."""
 
 import pandera.polars as pa
 import polars as pl

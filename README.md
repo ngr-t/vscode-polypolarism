@@ -2,13 +2,23 @@
 
 Static type checker for Polars DataFrames based on row polymorphism.
 
+## Demo
+
+![Polypolarism in action](docs/demo.gif)
+
+*A single `with_tax` function: the typed return-column mismatch is flagged
+inline, schema hover shows declared vs inferred frames, a QuickFix retypes the
+declared field, and a column rename propagates across files — see
+[`docs/demo-workspace/`](docs/demo-workspace/) for the recording storyboard.*
+
 ## Features
 
 - Real-time type checking for Polars DataFrame operations
 - Shows errors and warnings in the Problems panel and inline in the editor
-- Diagnostics carry their stable polypolarism code (`PLY###` errors,
-  `PLW###` warnings); the code links to the corresponding table in the
-  [polypolarism README](https://github.com/ngr-t/polypolarism#diagnostic-codes)
+- Diagnostics carry their stable polypolarism code (`pple-*` errors,
+  `pplw-*` warnings — e.g. `pple-return-type`, `pplw-unmodeled-method`); the
+  code links to the corresponding table in the
+  [polypolarism diagnostics reference](https://github.com/ngr-t/polypolarism/blob/main/docs/diagnostics.md#diagnostic-codes)
 - Diagnostics point at the precise location: function-level findings mark
   the `def` name, and typed return-column mismatches underline the
   offending expression and link to the `declared here` schema field
@@ -19,8 +29,9 @@ Static type checker for Polars DataFrames based on row polymorphism.
   frames (an `...` marks open frames that may carry extra columns)
 - QuickFix code actions: the lightbulb offers concrete edits for some
   diagnostics — make an over-constrained parameter a bare `pl.DataFrame`
-  (`PLY042`), align a declared schema field with the inferred dtype, or
-  declare an undeclared extra column on a strict schema (`PLY040`). Fixes
+  (`pple-undeclared-column`), align a declared schema field with the inferred
+  dtype, or declare an undeclared extra column on a strict schema
+  (`pple-return-type`). Fixes
   are only offered when the edit can be resolved unambiguously.
 - Rename a column: renaming a schema field (or a `pl.col("...")` reference)
   rewrites the field declaration and every reference polypolarism can
@@ -39,7 +50,7 @@ Static type checker for Polars DataFrames based on row polymorphism.
 - `polypolarism` package installed in your Python environment
   (recommended; see [Installation](#installation))
 - polypolarism's supported window: Polars `1.37+`, Pandera `0.19+`
-  (older versions are best-effort and flagged by a `PLW010` warning;
+  (older versions are best-effort and flagged by a `pplw-unsupported-version` warning;
   see [Supported versions](https://github.com/ngr-t/polypolarism#supported-versions))
 
 ## Installation
@@ -101,12 +112,15 @@ report any type mismatches.
 
 | Kind | Codes | Shown as |
 |---|---|---|
-| Errors | `PLY001`–`PLY043` | Problems panel **Error** |
-| Warnings | `PLW001`–`PLW013` | Problems panel **Warning** |
+| Errors | `pple-*` (e.g. `pple-return-type`) | Problems panel **Error** |
+| Warnings | `pplw-*` (e.g. `pplw-unmodeled-method`) | Problems panel **Warning** |
 
+polypolarism uses semantic slug codes (`pple-<slug>` for errors,
+`pplw-<slug>` for warnings); it previously used numeric `PLY###` / `PLW###`
+codes (see the [legacy code mapping](https://github.com/ngr-t/polypolarism/blob/main/docs/diagnostics.md#legacy-code-mapping-one-time-scheme-change)).
 Each diagnostic's code links to its description in the polypolarism
-README ([error table](https://github.com/ngr-t/polypolarism#diagnostic-codes),
-[warning table](https://github.com/ngr-t/polypolarism#apply-style-helpers-and-warning-codes)).
+diagnostics reference ([error table](https://github.com/ngr-t/polypolarism/blob/main/docs/diagnostics.md#diagnostic-codes),
+[warning table](https://github.com/ngr-t/polypolarism/blob/main/docs/diagnostics.md#apply-style-helpers-and-warning-codes)).
 Files that cannot be parsed produce an uncoded `SyntaxError` diagnostic
 instead of being silently skipped.
 

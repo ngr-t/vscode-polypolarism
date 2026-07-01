@@ -1,4 +1,4 @@
-"""Sample exercising a typed return-column mismatch (PLY040): the schema
+"""Sample exercising a typed return-column mismatch (pple-return-type): the schema
 declares ``total: int`` but ``sum()`` over a Float64 column infers Float64,
 so polypolarism reports a precise inferred-side span plus a ``declared here``
 related location."""
