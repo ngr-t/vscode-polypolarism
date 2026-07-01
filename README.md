@@ -7,9 +7,8 @@ Static type checker for Polars DataFrames based on row polymorphism.
 ![Polypolarism in action](docs/demo.gif)
 
 *A single `with_tax` function: the typed return-column mismatch is flagged
-inline, schema hover shows declared vs inferred frames, a QuickFix retypes the
-declared field, and a column rename propagates across files — see
-[`docs/demo-workspace/`](docs/demo-workspace/) for the recording storyboard.*
+inline, schema hover shows the declared vs inferred frames, a QuickFix retypes
+the declared field, and a column rename propagates across files.*
 
 ## Features
 
@@ -55,9 +54,10 @@ declared field, and a column rename propagates across files — see
 
 ## Installation
 
-### From VSIX (Manual Installation)
+The extension is not on the Marketplace yet, so install the built `.vsix`
+manually:
 
-1. Download or build the `.vsix` file (see [Development](#development) section)
+1. Build the `.vsix` file — see [`docs/development.md`](docs/development.md)
 2. Install via command line:
    ```bash
    code --install-extension polypolarism.vsix
@@ -136,61 +136,10 @@ instead of being silently skipped.
 
 - `Polypolarism: Restart Server` - Restart the language server
 
-## Development
+## Contributing
 
-### Prerequisites
-
-- Node.js >= 18.17.0
-- npm >= 8.19.0
-- Python 3.11+
-- nox (`pip install nox`)
-
-### Setup
-
-```bash
-# 1. Install Node.js dependencies
-npm install
-
-# 2. Install nox (use virtual environment or uv to avoid system Python restrictions)
-uv venv .venv
-source .venv/bin/activate  # or: .venv/Scripts/activate on Windows
-uv pip install nox
-
-# 3. Setup Python dependencies (pygls, etc.)
-nox --session setup
-
-# 4. Install polypolarism to bundled/libs
-#    Note: polypolarism is not on PyPI, so we install from local path or GitHub
-python3 -m pip install -t ./bundled/libs --no-cache-dir --no-deps /path/to/polypolarism
-# Or from GitHub:
-python3 -m pip install -t ./bundled/libs --no-cache-dir --no-deps git+https://github.com/ngr-t/polypolarism.git
-```
-
-### Build
-
-```bash
-npm run compile
-```
-
-### Debug
-
-Use the `Debug Extension and Python` launch configuration in VS Code (F5).
-
-### Package
-
-```bash
-npm run vsce-package
-```
-
-This creates `polypolarism.vsix` which can be installed manually.
-
-### Install Locally
-
-```bash
-code --install-extension polypolarism.vsix
-# Or on macOS:
-"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" --install-extension polypolarism.vsix
-```
+Build, debug, and packaging instructions live in
+[`docs/development.md`](docs/development.md).
 
 ## Troubleshooting
 
@@ -207,13 +156,6 @@ pip install git+https://github.com/ngr-t/polypolarism.git
 2. Check `polypolarism.importStrategy` setting:
    - `useBundled`: Uses the polypolarism snapshot bundled with the extension
    - `fromEnvironment`: Uses polypolarism from your Python environment (recommended — keeps you on the version you installed from GitHub)
-
-### "externally-managed-environment" error when installing nox
-
-Use a virtual environment:
-```bash
-uv venv .venv && source .venv/bin/activate && uv pip install nox
-```
 
 ## License
 
