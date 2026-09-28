@@ -1,14 +1,23 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-/* eslint-disable @typescript-eslint/naming-convention */
 import { commands, Disposable, Event, EventEmitter, Uri } from 'vscode';
 import { traceError, traceLog } from './log/logging';
-import { PythonExtension, ResolvedEnvironment } from '@vscode/python-extension';
+import { PythonExtension, Resource, ResolvedEnvironment } from '@vscode/python-extension';
 
 export interface IInterpreterDetails {
     path?: string[];
     resource?: Uri;
+}
+
+// `@vscode/python-extension` 1.0.6 widened the active-environment change
+// event's `resource` from `WorkspaceFolder` to `Resource` (= `Uri |
+// WorkspaceFolder`), so unwrap whichever of the two arrives.
+function resourceToUri(resource: Resource | undefined): Uri | undefined {
+    if (!resource) {
+        return undefined;
+    }
+    return 'uri' in resource ? resource.uri : resource;
 }
 
 const onDidChangePythonInterpreterEvent = new EventEmitter<IInterpreterDetails>();
@@ -30,7 +39,7 @@ export async function initializePython(disposables: Disposable[]): Promise<void>
         if (api) {
             disposables.push(
                 api.environments.onDidChangeActiveEnvironmentPath((e) => {
-                    onDidChangePythonInterpreterEvent.fire({ path: [e.path], resource: e.resource?.uri });
+                    onDidChangePythonInterpreterEvent.fire({ path: [e.path], resource: resourceToUri(e.resource) });
                 }),
             );
 
