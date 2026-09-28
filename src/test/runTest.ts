@@ -4,11 +4,7 @@
 // file (so the onLanguage/workspaceContains activation events fire).
 import * as cp from 'child_process';
 import * as path from 'path';
-import {
-    downloadAndUnzipVSCode,
-    resolveCliArgsFromVSCodeExecutablePath,
-    runTests,
-} from '@vscode/test-electron';
+import { downloadAndUnzipVSCode, resolveCliArgsFromVSCodeExecutablePath, runTests } from '@vscode/test-electron';
 
 async function main(): Promise<void> {
     try {

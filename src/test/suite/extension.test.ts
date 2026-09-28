@@ -23,9 +23,6 @@ suite('Extension smoke', () => {
         assert.ok(ext);
         await ext.activate();
         const commands = await vscode.commands.getCommands(true);
-        assert.ok(
-            commands.includes('polypolarism.restart'),
-            'polypolarism.restart is not registered',
-        );
+        assert.ok(commands.includes('polypolarism.restart'), 'polypolarism.restart is not registered');
     });
 });
