@@ -110,6 +110,22 @@ Catch-up sync with polypolarism main:
   earlier `022c621` sync's additions (analyzer fixes for issues #95–#108,
   `# type: ignore[...]` diagnostic suppression, and the `typing.cast`
   schema-assertion warning) remain.
+- Dependency sweep (dependabot #20–#25): `@vscode/test-electron` 3.1.0
+  (which now requires Node >= 22), ESLint 10.8, `@typescript-eslint/parser`
+  8.65, TypeScript 6.0, `fs-extra` 11.4 and `packaging` 26.3. Three
+  follow-ups were needed to get the checks green again:
+  - ESLint config ported to flat config (`eslint.config.mjs`). ESLint 10 no
+    longer reads `.eslintrc.json` and no longer accepts `--ext`, so
+    `npm run lint` had been failing before it linted anything. Three
+    `eslint-disable` directives that disabled nothing were removed (unused
+    directives are reported by default since ESLint 9).
+  - `@vscode/python-extension` 1.0.6 widened the active-environment change
+    event's `resource` from `WorkspaceFolder` to `Resource`
+    (`Uri | WorkspaceFolder`), which broke `tsc`; the extension now unwraps
+    either shape.
+  - `npm run format-check` pointed at `build/**/*.yml`, a path this repo
+    does not have (prettier fails on unmatched patterns), and two test
+    files were unformatted under prettier 3.9.
 
 ## 0.1.0
 
